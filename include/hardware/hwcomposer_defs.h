@@ -76,6 +76,9 @@ enum {
      * by SurfaceFlinger (just as if compositionType was set to HWC_OVERLAY).
      */
     HWC_SKIP_LAYER = 0x00000001,
+#ifdef QCOM_BSP
+    HWC_SCREENSHOT_ANIMATOR_LAYER = 0x00000002,
+#endif
 };
 
 /*
@@ -175,7 +178,10 @@ enum {
 
 /* Allowed events for hwc_methods::eventControl() */
 enum {
-    HWC_EVENT_VSYNC     = 0
+    HWC_EVENT_VSYNC     = 0,
+#ifdef QCOM_BSP
+    HWC_EVENT_ORIENTATION
+#endif
 };
 
 /* Display types and associated mask bits. */

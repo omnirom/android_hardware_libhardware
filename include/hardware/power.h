@@ -17,6 +17,8 @@
 #ifndef ANDROID_INCLUDE_HARDWARE_POWER_H
 #define ANDROID_INCLUDE_HARDWARE_POWER_H
 
+#define HAS_MULTIMEDIA_HINTS
+
 #include <stdint.h>
 #include <sys/cdefs.h>
 #include <sys/types.h>

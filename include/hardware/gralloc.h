@@ -345,6 +345,34 @@ static inline int gralloc_close(struct alloc_device_t* device) {
     return device->common.close(&device->common);
 }
 
+#define GRALLOC_HARDWARE_EXTRA "extra"
+
+typedef struct extra_device_t {
+    struct hw_device_t common;
+
+    /*
+     * (*getIonFd)() is called for getting ion share fd from buffer handle
+     * It should return the beginning index of native_handle.data[]
+     * for ion shard fds and number of ion share fds
+     */
+
+    int (*getIonFd)(struct extra_device_t* dev,
+            buffer_handle_t handle, int *idx, int *num);
+
+    void* reserved_proc[7];
+} extra_device_t;
+
+static inline int gralloc_extra_open(const struct hw_module_t* module,
+        struct extra_device_t** device) {
+    return module->methods->open(module,
+            GRALLOC_HARDWARE_EXTRA, (struct hw_device_t**)device);
+}
+
+static inline int gralloc_extra_close(struct extra_device_t* device) {
+    return device->common.close(&device->common);
+}
+
+
 __END_DECLS
 
 #endif  // ANDROID_GRALLOC_INTERFACE_H

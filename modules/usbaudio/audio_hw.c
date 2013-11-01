@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "usb_audio_hw"
-/*#define LOG_NDEBUG 0*/
+//#define LOG_NDEBUG 0
 
 #include <errno.h>
 #include <pthread.h>
@@ -32,6 +32,10 @@
 #include <hardware/audio.h>
 
 #include <tinyalsa/asoundlib.h>
+
+#ifndef CARD_ID
+#define CARD_ID 1
+#endif
 
 struct pcm_config pcm_config = {
     .channels = 2,
@@ -65,6 +69,10 @@ struct stream_out {
  * following order: hw device > out stream
  */
 
+/* out_set_parameters() sets this to 1 whilst another output device is active in order
+   to prevent it from later resetting the output device back to the hard coded default */
+static int out_override = 0;
+
 /* Helper functions */
 
 /* must be called with hw device and output stream mutexes locked */
@@ -76,7 +84,12 @@ static int start_output_stream(struct stream_out *out)
     if ((adev->card < 0) || (adev->device < 0))
         return -EINVAL;
 
+    ALOGD("start_output_stream()");
+#ifdef USE_MMAP
+    out->pcm = pcm_open(adev->card, adev->device, PCM_OUT | PCM_MMAP | PCM_NOIRQ , &pcm_config);
+#else
     out->pcm = pcm_open(adev->card, adev->device, PCM_OUT, &pcm_config);
+#endif
 
     if (out->pcm && !pcm_is_ready(out->pcm)) {
         ALOGE("pcm_open() failed: %s", pcm_get_error(out->pcm));
@@ -127,6 +140,7 @@ static int out_standby(struct audio_stream *stream)
     pthread_mutex_lock(&out->dev->lock);
     pthread_mutex_lock(&out->lock);
 
+    ALOGD("out_standby");
     if (!out->standby) {
         pcm_close(out->pcm);
         out->pcm = NULL;
@@ -152,18 +166,36 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     char value[32];
     int ret;
     int routing = 0;
+    int closing = 0;
 
     parms = str_parms_create_str(kvpairs);
     pthread_mutex_lock(&adev->lock);
 
-    ret = str_parms_get_str(parms, "card", value, sizeof(value));
+    ret = str_parms_get_str(parms, "closing", value, sizeof(value));
     if (ret >= 0)
+    {
+        closing = (strcmp(value, "true") == 0);
+        out_override = !closing;
+    }
+
+    ret = str_parms_get_str(parms, "card", value, sizeof(value));
+    if (ret >= 0) {
         adev->card = atoi(value);
+        out_override = 1;
+    }
 
     ret = str_parms_get_str(parms, "device", value, sizeof(value));
-    if (ret >= 0)
+    if (ret >= 0) {
         adev->device = atoi(value);
+        out_override = 1;
+    }
 
+    if (out_override == 0) {
+        adev->card = CARD_ID;
+        adev->device = 0;
+    }
+
+    ALOGD("out_set_parameters card [%d] device[%d] out_override[%d]", adev->card, adev->device, out_override);
     pthread_mutex_unlock(&adev->lock);
     str_parms_destroy(parms);
 
@@ -193,6 +225,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
     int ret;
     struct stream_out *out = (struct stream_out *)stream;
 
+    ALOGV("out_write() USB HAL writing %d", bytes);
     pthread_mutex_lock(&out->dev->lock);
     pthread_mutex_lock(&out->lock);
     if (out->standby) {
@@ -203,16 +236,25 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
         out->standby = false;
     }
 
+#ifdef USE_MMAP
+    ret = pcm_mmap_write(out->pcm, (void *)buffer, bytes);
+#else
     pcm_write(out->pcm, (void *)buffer, bytes);
+#endif
 
     pthread_mutex_unlock(&out->lock);
     pthread_mutex_unlock(&out->dev->lock);
 
+#ifdef USE_MMAP
+    return ret? ret: bytes;
+#else
     return bytes;
+#endif
 
 err:
+    ALOGE("out_write() ERR");
     pthread_mutex_unlock(&out->lock);
-
+    pthread_mutex_unlock(&out->dev->lock);
     if (ret != 0) {
         usleep(bytes * 1000000 / audio_stream_frame_size(&stream->common) /
                out_get_sample_rate(&stream->common));

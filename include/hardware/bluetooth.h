@@ -1,4 +1,7 @@
 /*
+ * Copyright (c) 2013, The Linux Foundation. All rights reserved.
+ * Not a Contribution
+ *
  * Copyright (C) 2012 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,11 +40,13 @@ __BEGIN_DECLS
 /* Bluetooth profile interface IDs */
 
 #define BT_PROFILE_HANDSFREE_ID "handsfree"
+#define BT_PROFILE_HANDSFREE_CLIENT_ID "handsfree_client"
 #define BT_PROFILE_ADVANCED_AUDIO_ID "a2dp"
 #define BT_PROFILE_HEALTH_ID "health"
 #define BT_PROFILE_SOCKETS_ID "socket"
 #define BT_PROFILE_HIDHOST_ID "hidhost"
 #define BT_PROFILE_PAN_ID "pan"
+#define BT_PROFILE_MAP_CLIENT_ID "map_client"
 
 #define BT_PROFILE_GATT_ID "gatt"
 #define BT_PROFILE_AV_RC_ID "avrcp"
@@ -83,7 +88,8 @@ typedef enum {
     BT_STATUS_PARM_INVALID,
     BT_STATUS_UNHANDLED,
     BT_STATUS_AUTH_FAILURE,
-    BT_STATUS_RMT_DEV_DOWN
+    BT_STATUS_RMT_DEV_DOWN,
+    BT_STATUS_AUTH_REJECTED
 
 } bt_status_t;
 
@@ -200,7 +206,14 @@ typedef enum {
      * Data type   - int32_t.
      */
     BT_PROPERTY_REMOTE_RSSI,
-    /**
+
+   /**
+    * Description - Trust value of the remote device
+    * Access mode - GET and SET
+    * Data type   - boolean.
+    */
+    BT_PROPERTY_REMOTE_TRUST_VALUE,
+   /**
      * Description - Remote version info
      * Access mode - SET/GET.
      * Data type   - bt_remote_version_t.

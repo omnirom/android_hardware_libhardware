@@ -1,4 +1,6 @@
-/*
+/* Copyright (c) 2013, The Linux Foundation. All rights reserved.
+ * Not a Contribution.
+ *
  * Copyright (C) 2012 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -139,6 +141,10 @@ typedef void (* bthf_unknown_at_cmd_callback)(char *at_string);
  */
 typedef void (* bthf_key_pressed_cmd_callback)();
 
+/** Callback for Codec negotiation event.
+*/
+typedef void (* bthf_codec_negotiated_callback)(int codec_type);
+
 /** BT-HF callback structure. */
 typedef struct {
     /** set to sizeof(BtHfCallbacks) */
@@ -159,6 +165,7 @@ typedef struct {
     bthf_clcc_cmd_callback          clcc_cmd_cb;
     bthf_unknown_at_cmd_callback    unknown_at_cmd_cb;
     bthf_key_pressed_cmd_callback   key_pressed_cmd_cb;
+    bthf_codec_negotiated_callback  codec_negotiated_callback;
 } bthf_callbacks_t;
 
 /** Network Status */
@@ -214,6 +221,9 @@ typedef struct {
      * Register the BtHf callbacks
      */
     bt_status_t (*init)( bthf_callbacks_t* callbacks );
+
+    /** Set the feature bitmask */
+    bt_status_t (*init_features)( int feature_bitmask );
 
     /** connect to headset */
     bt_status_t (*connect)( bt_bdaddr_t *bd_addr );

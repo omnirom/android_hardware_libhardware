@@ -44,7 +44,9 @@ typedef enum {
      * KLP.
      */
     POWER_HINT_VIDEO_ENCODE = 0x00000003,
-    POWER_HINT_VIDEO_DECODE = 0x00000004
+    POWER_HINT_VIDEO_DECODE = 0x00000004,
+
+    POWER_HINT_CPU_BOOST = 0x00000010
 } power_hint_t;
 
 /**

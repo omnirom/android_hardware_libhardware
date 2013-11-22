@@ -48,6 +48,11 @@
 #define dout if (0) std::cout
 #endif
 
+#define WARN_UNLESS(condition) (!(condition) ? (std::cerr) : (std::ostream(NULL)) << "Warning: ")
+#define WARN_LE(exp, act) WARN_UNLESS((exp) <= (act))
+#define WARN_LT(exp, act) WARN_UNLESS((exp) < (act))
+#define WARN_GT(exp, act) WARN_UNLESS((exp) > (act))
+
 using namespace android;
 using namespace android::camera2;
 
@@ -183,7 +188,7 @@ TEST_F(CameraBurstTest, ManualExposureControl) {
     ASSERT_EQ(OK, mDevice->createDefaultRequest(CAMERA2_TEMPLATE_PREVIEW,
                                                 &previewRequest));
     {
-        Vector<uint8_t> outputStreamIds;
+        Vector<int32_t> outputStreamIds;
         outputStreamIds.push(mStreamId);
         ASSERT_EQ(OK, previewRequest.update(ANDROID_REQUEST_OUTPUT_STREAMS,
                                             outputStreamIds));
@@ -273,10 +278,16 @@ TEST_F(CameraBurstTest, ManualExposureControl) {
 
     dout << "max doubling count: " << max_doubling_count << std::endl;
 
-    EXPECT_LE(CAMERA_EXPOSURE_DOUBLING_COUNT, max_doubling_count)
-      << "average brightness should double at least "
-      << CAMERA_EXPOSURE_DOUBLING_COUNT
-      << " times over each consecutive frame as the exposure is doubled";
+    /**
+     * Make this check warning only, since the brightness calculation is not reliable
+     * and we have separate test to cover this case. Plus it is pretty subtle to make
+     * it right without complicating the test too much.
+     */
+    WARN_LE(CAMERA_EXPOSURE_DOUBLING_COUNT, max_doubling_count)
+            << "average brightness should double at least "
+            << CAMERA_EXPOSURE_DOUBLING_COUNT
+            << " times over each consecutive frame as the exposure is doubled"
+            << std::endl;
 }
 
 /**
@@ -351,6 +362,23 @@ TEST_F(CameraBurstTest, VariableBurst) {
         }
     }
 
+    camera_metadata_ro_entry hardwareLevel =
+        GetStaticEntry(ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL);
+    ASSERT_EQ(1u, hardwareLevel.count);
+    uint8_t level = hardwareLevel.data.u8[0];
+    ASSERT_GE(level, ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED);
+    ASSERT_LE(level, ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL_FULL);
+    if (level == ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED) {
+        const ::testing::TestInfo* const test_info =
+            ::testing::UnitTest::GetInstance()->current_test_info();
+        std::cerr << "Skipping test "
+                  << test_info->test_case_name() << "."
+                  << test_info->name()
+                  << " because HAL hardware supported level is limited "
+                  << std::endl;
+        return;
+    }
+
     dout << "Stream size is " << mWidth << " x " << mHeight << std::endl;
     dout << "Valid exposure range is: " <<
             minExp << " - " << maxExp << " ns " << std::endl;
@@ -362,7 +390,9 @@ TEST_F(CameraBurstTest, VariableBurst) {
                 "Falling back to default set.";
         int32_t minSensitivity = 100;
         int32_t maxSensitivity = 800;
-        if (sensivityRange.count >= 2) {
+        if (sensivityRange.count == 2) {
+            ASSERT_GT(sensivityRange.data.i32[0], 0);
+            ASSERT_GT(sensivityRange.data.i32[1], 0);
             minSensitivity = sensivityRange.data.i32[0];
             maxSensitivity = sensivityRange.data.i32[1];
         }
@@ -558,7 +588,7 @@ TEST_F(CameraBurstTest, VariableBurst) {
     ASSERT_EQ(OK, mDevice->createDefaultRequest(CAMERA2_TEMPLATE_PREVIEW,
                                                 &previewRequest));
     {
-        Vector<uint8_t> outputStreamIds;
+        Vector<int32_t> outputStreamIds;
         outputStreamIds.push(mStreamId);
         ASSERT_EQ(OK, previewRequest.update(ANDROID_REQUEST_OUTPUT_STREAMS,
                                             outputStreamIds));
@@ -652,12 +682,13 @@ TEST_F(CameraBurstTest, VariableBurst) {
             float evRatio = (prevEv > currentEv) ? (currentEv / prevEv) :
                     (prevEv / currentEv);
             if ( evRatio > EV_MATCH_BOUND ) {
-                EXPECT_LT( fabs(brightnesses[i] - brightnesses[i - 1]),
+                WARN_LT(fabs(brightnesses[i] - brightnesses[i - 1]),
                         BRIGHTNESS_MATCH_BOUND) <<
                         "Capture brightness different from previous, even though "
                         "they have the same EV value. Ev now: " << currentEv <<
                         ", previous: " << prevEv << ". Brightness now: " <<
-                        brightnesses[i] << ", previous: " << brightnesses[i-1];
+                        brightnesses[i] << ", previous: " << brightnesses[i-1] <<
+                        std::endl;
             }
             // Only check timing if not saving to disk, since that slows things
             // down substantially
@@ -665,12 +696,14 @@ TEST_F(CameraBurstTest, VariableBurst) {
                 nsecs_t timeDelta = captureTimes[i] - captureTimes[i-1];
                 nsecs_t expectedDelta = expList[i] > durationList[i] ?
                         expList[i] : durationList[i];
-                EXPECT_LT(timeDelta, expectedDelta + DURATION_UPPER_BOUND) <<
+                WARN_LT(timeDelta, expectedDelta + DURATION_UPPER_BOUND) <<
                         "Capture took " << timeDelta << " ns to receive, but expected"
-                        " frame duration was " << expectedDelta << " ns.";
-                EXPECT_GT(timeDelta, expectedDelta - DURATION_LOWER_BOUND) <<
+                        " frame duration was " << expectedDelta << " ns." <<
+                        std::endl;
+                WARN_GT(timeDelta, expectedDelta - DURATION_LOWER_BOUND) <<
                         "Capture took " << timeDelta << " ns to receive, but expected"
-                    " frame duration was " << expectedDelta << " ns.";
+                        " frame duration was " << expectedDelta << " ns." <<
+                        std::endl;
                 dout << "Time delta from previous frame: " << timeDelta / 1e6 <<
                         " ms.  Expected " << expectedDelta / 1e6 << " ms" << std::endl;
             }

@@ -89,11 +89,13 @@ static int load(const char *id,
     }
 
     /* Check that the id matches */
+#ifndef DISABLE_HW_ID_MATCH_CHECK
     if (strcmp(id, hmi->id) != 0) {
         ALOGE("load: id=%s != hmi->id=%s", id, hmi->id);
         status = -EINVAL;
         goto done;
     }
+#endif /* DISABLE_HW_ID_MATCH_CHECK */
 
     hmi->dso = handle;
 
@@ -153,6 +155,10 @@ int hw_get_module_by_class(const char *class_id, const char *inst,
                      HAL_LIBRARY_PATH1, name, prop);
             if (access(path, R_OK) == 0) break;
         } else {
+            snprintf(path, sizeof(path), "%s/%s.default.so",
+                     HAL_LIBRARY_PATH2, name);
+            if (access(path, R_OK) == 0) break;
+
             snprintf(path, sizeof(path), "%s/%s.default.so",
                      HAL_LIBRARY_PATH1, name);
             if (access(path, R_OK) == 0) break;

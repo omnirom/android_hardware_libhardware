@@ -19,14 +19,21 @@
 
 __BEGIN_DECLS
 
-#define BTSOCK_FLAG_ENCRYPT 1
-#define BTSOCK_FLAG_AUTH (1 << 1)
+#define BTSOCK_FLAG_ENCRYPT   (1)
+#define BTSOCK_FLAG_AUTH      (1 << 1)
+#define BTSOCK_FLAG_AUTH_HIGH (1 << 2)
 
 typedef enum {
     BTSOCK_RFCOMM = 1,
     BTSOCK_SCO = 2,
     BTSOCK_L2CAP = 3
 } btsock_type_t;
+
+typedef enum {
+    BTSOCK_OPT_GET_MODEM_BITS = 1,
+    BTSOCK_OPT_SET_MODEM_BITS = 2,
+    BTSOCK_OPT_CLR_MODEM_BITS = 3,
+} btsock_option_type_t;
 
 /** Represents the standard BT SOCKET interface. */
 typedef struct {
@@ -50,6 +57,15 @@ typedef struct {
      * the btsock_connect_signal and a new socket fd to be accepted can be read out when connected
      */
     bt_status_t (*connect)(const bt_bdaddr_t *bd_addr, btsock_type_t type, const uint8_t* uuid, int channel, int* sock_fd, int flags);
+    /*
+     * get socket option of rfcomm channel socket.
+     */
+    bt_status_t (*get_sock_opt)(btsock_type_t type, int channel, btsock_option_type_t option_name, void *option_value, int *option_len);
+    /*
+     * set socket option of rfcomm channel socket.
+     */
+    bt_status_t (*set_sock_opt)(btsock_type_t type, int channel, btsock_option_type_t option_name, void *option_value, int option_len);
+
 
 } btsock_interface_t;
 

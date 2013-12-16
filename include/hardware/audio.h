@@ -56,7 +56,11 @@ __BEGIN_DECLS
 #define AUDIO_DEVICE_API_VERSION_0_0 HARDWARE_DEVICE_API_VERSION(0, 0)
 #define AUDIO_DEVICE_API_VERSION_1_0 HARDWARE_DEVICE_API_VERSION(1, 0)
 #define AUDIO_DEVICE_API_VERSION_2_0 HARDWARE_DEVICE_API_VERSION(2, 0)
+#ifndef ICS_AUDIO_BLOB
 #define AUDIO_DEVICE_API_VERSION_CURRENT AUDIO_DEVICE_API_VERSION_2_0
+#else
+#define AUDIO_DEVICE_API_VERSION_CURRENT AUDIO_DEVICE_API_VERSION_1_0
+#endif
 
 /**
  * List of known audio HAL modules. This is the base name of the audio HAL
@@ -120,24 +124,6 @@ __BEGIN_DECLS
  * "sup_sampling_rates=44100|48000" */
 #define AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES "sup_sampling_rates"
 
-/**
- * audio codec parameters
- */
-
-#define AUDIO_OFFLOAD_CODEC_PARAMS "music_offload_codec_param"
-#define AUDIO_OFFLOAD_CODEC_BIT_PER_SAMPLE "music_offload_bit_per_sample"
-#define AUDIO_OFFLOAD_CODEC_BIT_RATE "music_offload_bit_rate"
-#define AUDIO_OFFLOAD_CODEC_AVG_BIT_RATE "music_offload_avg_bit_rate"
-#define AUDIO_OFFLOAD_CODEC_ID "music_offload_codec_id"
-#define AUDIO_OFFLOAD_CODEC_BLOCK_ALIGN "music_offload_block_align"
-#define AUDIO_OFFLOAD_CODEC_SAMPLE_RATE "music_offload_sample_rate"
-#define AUDIO_OFFLOAD_CODEC_ENCODE_OPTION "music_offload_encode_option"
-#define AUDIO_OFFLOAD_CODEC_NUM_CHANNEL  "music_offload_num_channels"
-#define AUDIO_OFFLOAD_CODEC_DOWN_SAMPLING  "music_offload_down_sampling"
-#define AUDIO_OFFLOAD_CODEC_DELAY_SAMPLES  "delay_samples"
-#define AUDIO_OFFLOAD_CODEC_PADDING_SAMPLES  "padding_samples"
-
-#ifdef QCOM_HARDWARE
 /* Query handle fm parameter*/
 #define AUDIO_PARAMETER_KEY_HANDLE_FM "handle_fm"
 
@@ -156,12 +142,31 @@ __BEGIN_DECLS
 /* Query ADSP Status */
 #define AUDIO_PARAMETER_KEY_ADSP_STATUS "ADSP_STATUS"
 
+/* Query Sound Card Status */
+#define AUDIO_PARAMETER_KEY_SND_CARD_STATUS "SND_CARD_STATUS"
+
 /* Query if Proxy can be Opend */
 #define AUDIO_CAN_OPEN_PROXY "can_open_proxy"
 
 /* Query fm volume */
 #define AUDIO_PARAMETER_KEY_FM_VOLUME "fm_volume"
-#endif
+
+/**
+ * audio codec parameters
+ */
+
+#define AUDIO_OFFLOAD_CODEC_PARAMS "music_offload_codec_param"
+#define AUDIO_OFFLOAD_CODEC_BIT_PER_SAMPLE "music_offload_bit_per_sample"
+#define AUDIO_OFFLOAD_CODEC_BIT_RATE "music_offload_bit_rate"
+#define AUDIO_OFFLOAD_CODEC_AVG_BIT_RATE "music_offload_avg_bit_rate"
+#define AUDIO_OFFLOAD_CODEC_ID "music_offload_codec_id"
+#define AUDIO_OFFLOAD_CODEC_BLOCK_ALIGN "music_offload_block_align"
+#define AUDIO_OFFLOAD_CODEC_SAMPLE_RATE "music_offload_sample_rate"
+#define AUDIO_OFFLOAD_CODEC_ENCODE_OPTION "music_offload_encode_option"
+#define AUDIO_OFFLOAD_CODEC_NUM_CHANNEL  "music_offload_num_channels"
+#define AUDIO_OFFLOAD_CODEC_DOWN_SAMPLING  "music_offload_down_sampling"
+#define AUDIO_OFFLOAD_CODEC_DELAY_SAMPLES  "delay_samples"
+#define AUDIO_OFFLOAD_CODEC_PADDING_SAMPLES  "padding_samples"
 
 /**************************************/
 
@@ -333,6 +338,19 @@ struct audio_stream_out {
     int (*get_render_position)(const struct audio_stream_out *stream,
                                uint32_t *dsp_frames);
 
+#ifndef ICS_AUDIO_BLOB
+#ifdef QCOM_HARDWARE
+    /**
+     * start audio data rendering
+     */
+    int (*start)(struct audio_stream_out *stream);
+
+    /**
+     * stop audio data rendering
+     */
+    int (*stop)(struct audio_stream_out *stream);
+#endif
+
     /**
      * get the local time at which the next write to the audio driver will be presented.
      * The units are microseconds, where the epoch is decided by the local audio HAL.
@@ -348,18 +366,6 @@ struct audio_stream_out {
      */
     int (*set_callback)(struct audio_stream_out *stream,
             stream_callback_t callback, void *cookie);
-
-#ifdef QCOM_HARDWARE
-    /**
-     * start audio data rendering
-     */
-    int (*start)(struct audio_stream_out *stream);
-
-    /**
-     * stop audio data rendering
-     */
-    int (*stop)(struct audio_stream_out *stream);
-#endif
 
     /**
      * Notifies to the audio driver to stop playback however the queued buffers are
@@ -405,7 +411,7 @@ struct audio_stream_out {
      *
      * Implementation of this function is mandatory for offloaded playback.
      */
-    int (*flush)(struct audio_stream_out* stream);
+   int (*flush)(struct audio_stream_out* stream);
 
     /**
      * Return a recent count of the number of audio frames presented to an external observer.
@@ -425,7 +431,7 @@ struct audio_stream_out {
      */
     int (*get_presentation_position)(const struct audio_stream_out *stream,
                                uint64_t *frames, struct timespec *timestamp);
-
+#endif
 #ifdef QCOM_HARDWARE
     /**
     * return the current timestamp after quering to the driver
@@ -450,7 +456,6 @@ struct audio_stream_out {
     int (*is_buffer_available) (const struct audio_stream_out *stream,
                                      int *isAvail);
 #endif
-
 };
 typedef struct audio_stream_out audio_stream_out_t;
 
@@ -590,6 +595,7 @@ struct audio_hw_device {
      */
     int (*set_master_volume)(struct audio_hw_device *dev, float volume);
 
+#ifndef ICS_AUDIO_BLOB
     /**
      * Get the current master volume value for the HAL, if the HAL supports
      * master volume control.  AudioFlinger will query this value from the
@@ -598,6 +604,7 @@ struct audio_hw_device {
      * this method may leave it set to NULL.
      */
     int (*get_master_volume)(struct audio_hw_device *dev, float *volume);
+#endif
 
     /**
      * set_mode is called when the audio mode changes. AUDIO_MODE_NORMAL mode
@@ -625,25 +632,45 @@ struct audio_hw_device {
      * See also get_buffer_size which is for a particular stream.
      */
     size_t (*get_input_buffer_size)(const struct audio_hw_device *dev,
+#ifndef ICS_AUDIO_BLOB
                                     const struct audio_config *config);
+#else
+                                    uint32_t sample_rate, int format,
+                                    int channel_count);
+#endif
 
     /** This method creates and opens the audio hardware output stream */
+#ifndef ICS_AUDIO_BLOB
     int (*open_output_stream)(struct audio_hw_device *dev,
                               audio_io_handle_t handle,
                               audio_devices_t devices,
                               audio_output_flags_t flags,
                               struct audio_config *config,
                               struct audio_stream_out **stream_out);
+#else
+    int (*open_output_stream)(struct audio_hw_device *dev, uint32_t devices,
+                              int *format, uint32_t *channels,
+                              uint32_t *sample_rate,
+                              struct audio_stream_out **out);
+#endif
 
     void (*close_output_stream)(struct audio_hw_device *dev,
                                 struct audio_stream_out* stream_out);
 
     /** This method creates and opens the audio hardware input stream */
+#ifndef ICS_AUDIO_BLOB
     int (*open_input_stream)(struct audio_hw_device *dev,
                              audio_io_handle_t handle,
                              audio_devices_t devices,
                              struct audio_config *config,
                              struct audio_stream_in **stream_in);
+#else
+    int (*open_input_stream)(struct audio_hw_device *dev, uint32_t devices,
+                             int *format, uint32_t *channels,
+                             uint32_t *sample_rate,
+                             audio_in_acoustics_t acoustics,
+                             struct audio_stream_in **stream_in);
+#endif
 
     void (*close_input_stream)(struct audio_hw_device *dev,
                                struct audio_stream_in *stream_in);
@@ -651,6 +678,7 @@ struct audio_hw_device {
     /** This method dumps the state of the audio hardware */
     int (*dump)(const struct audio_hw_device *dev, int fd);
 
+#ifndef ICS_AUDIO_BLOB
     /**
      * set the audio mute status for all audio activities.  If any value other
      * than 0 is returned, the software mixer will emulate this capability.
@@ -665,6 +693,7 @@ struct audio_hw_device {
      * method may leave it set to NULL.
      */
     int (*get_master_mute)(struct audio_hw_device *dev, bool *mute);
+#endif
 };
 typedef struct audio_hw_device audio_hw_device_t;
 

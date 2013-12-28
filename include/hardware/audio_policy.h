@@ -375,6 +375,13 @@ struct audio_policy_service_ops {
                         audio_io_handle_t src_output,
                         audio_io_handle_t dst_output);
 
+#ifdef QCOM_FM_ENABLED
+    /* set fm audio volume. */
+    int (*set_fm_volume)(void *service,
+                         float volume,
+                         int delay_ms);
+#endif
+
     /* loads an audio hw module.
      *
      * The module name passed is the base name of the HW module library, e.g "primary" or "a2dp".

@@ -25,6 +25,7 @@
 #include <limits.h>
 
 #define LOG_TAG "HAL"
+#define LOG_NDEBUG 0
 #include <utils/Log.h>
 
 /** Base path of the hal modules */
@@ -153,6 +154,7 @@ int hw_get_module_by_class(const char *class_id, const char *inst,
     char name[PATH_MAX];
     char prop_name[PATH_MAX];
 
+    ALOGE("%s: class_id=%s, inst=%s", __func__, class_id, inst);
     if (inst)
         snprintf(name, PATH_MAX, "%s.%s", class_id, inst);
     else
@@ -193,6 +195,7 @@ int hw_get_module_by_class(const char *class_id, const char *inst,
 found:
     /* load the module, if this fails, we're doomed, and we should not try
      * to load a different variant. */
+    ALOGE("%s: Loading class_id=%s, path=%s", __func__, class_id, path);
     return load(class_id, path, module);
 }
 

@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "8b77b57d_0679bb28",
+        "filename": "include/hardware/audio.h",
+        "patchSetId": 1
+      },
+      "lineNbr": 429,
+      "author": {
+        "id": 1000909
+      },
+      "writtenOn": "2014-05-20T21:24:47Z",
+      "side": 0,
+      "message": "Won\u0027t removing this result in one less #ifdef?",
+      "revId": "9dbefc0baa9340e3a3bd23e99cb69288296e8efd",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    }
+  ]
+}

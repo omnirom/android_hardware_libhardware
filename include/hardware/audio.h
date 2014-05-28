@@ -365,6 +365,7 @@ struct audio_stream_out {
      */
     int (*stop)(struct audio_stream_out *stream);
 #endif
+#endif
 
     /**
      * Notifies to the audio driver to stop playback however the queued buffers are
@@ -455,8 +456,6 @@ struct audio_stream_out {
     int (*is_buffer_available) (const struct audio_stream_out *stream,
                                      int *isAvail);
 #endif
-#endif
-
 };
 typedef struct audio_stream_out audio_stream_out_t;
 
@@ -613,6 +612,8 @@ struct audio_hw_device {
      * playing, and AUDIO_MODE_IN_CALL when a call is in progress.
      */
     int (*set_mode)(struct audio_hw_device *dev, audio_mode_t mode);
+    int (*dummy1)();
+    int (*dummy2)();
 
     /* mic mute */
     int (*set_mic_mute)(struct audio_hw_device *dev, bool state);

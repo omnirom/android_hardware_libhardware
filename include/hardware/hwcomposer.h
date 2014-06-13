@@ -266,10 +266,12 @@ typedef struct hwc_layer_1 {
              *   pixel.a = planeAlpha;
              *
              */
+#ifndef MTK_MT6589
             uint8_t planeAlpha;
 
             /* reserved for future use */
             uint8_t _pad[3];
+#endif
         };
     };
 
@@ -279,7 +281,7 @@ typedef struct hwc_layer_1 {
 #ifndef MTK_MT6589
     int32_t reserved[24 - 19];
 #else
-    int32_t reserved[24 - 19];
+    int32_t reserved[24 - 18];
 
     typedef struct hwc_layer_ext {
         /* string for distinguish handler */

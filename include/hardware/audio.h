@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011 The Android Open Source Project
- * Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
  * Not a Contribution.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +30,9 @@
 #include <hardware/hardware.h>
 #include <system/audio.h>
 #include <hardware/audio_effect.h>
+#ifdef AUDIO_LISTEN_ENABLED
+#include <listen_types.h>
+#endif
 
 __BEGIN_DECLS
 
@@ -56,7 +59,11 @@ __BEGIN_DECLS
 #define AUDIO_DEVICE_API_VERSION_0_0 HARDWARE_DEVICE_API_VERSION(0, 0)
 #define AUDIO_DEVICE_API_VERSION_1_0 HARDWARE_DEVICE_API_VERSION(1, 0)
 #define AUDIO_DEVICE_API_VERSION_2_0 HARDWARE_DEVICE_API_VERSION(2, 0)
+#ifndef ICS_AUDIO_BLOB
 #define AUDIO_DEVICE_API_VERSION_CURRENT AUDIO_DEVICE_API_VERSION_2_0
+#else
+#define AUDIO_DEVICE_API_VERSION_CURRENT AUDIO_DEVICE_API_VERSION_1_0
+#endif
 
 /**
  * List of known audio HAL modules. This is the base name of the audio HAL
@@ -136,8 +143,19 @@ __BEGIN_DECLS
 #define AUDIO_OFFLOAD_CODEC_DOWN_SAMPLING  "music_offload_down_sampling"
 #define AUDIO_OFFLOAD_CODEC_DELAY_SAMPLES  "delay_samples"
 #define AUDIO_OFFLOAD_CODEC_PADDING_SAMPLES  "padding_samples"
+#define AUDIO_OFFLOAD_CODEC_WMA_FORMAT_TAG "music_offload_wma_format_tag"
+#define AUDIO_OFFLOAD_CODEC_WMA_BLOCK_ALIGN "music_offload_wma_block_align"
+#define AUDIO_OFFLOAD_CODEC_WMA_BIT_PER_SAMPLE "music_offload_wma_bit_per_sample"
+#define AUDIO_OFFLOAD_CODEC_WMA_CHANNEL_MASK "music_offload_wma_channel_mask"
+#define AUDIO_OFFLOAD_CODEC_WMA_ENCODE_OPTION "music_offload_wma_encode_option"
+#define AUDIO_OFFLOAD_CODEC_WMA_ENCODE_OPTION1"music_offload_wma_encode_option1"
+#define AUDIO_OFFLOAD_CODEC_WMA_ENCODE_OPTION2 "music_offload_wma_encode_option2"
+#define AUDIO_OFFLOAD_CODEC_FORMAT  "music_offload_codec_format"
+#define AUDIO_OFFLOAD_CODEC_FLAC_MIN_BLK_SIZE "music_offload_flac_min_blk_size"
+#define AUDIO_OFFLOAD_CODEC_FLAC_MAX_BLK_SIZE "music_offload_flac_max_blk_size"
+#define AUDIO_OFFLOAD_CODEC_FLAC_MIN_FRAME_SIZE "music_offload_flac_min_frame_size"
+#define AUDIO_OFFLOAD_CODEC_FLAC_MAX_FRAME_SIZE "music_offload_flac_max_frame_size"
 
-#ifdef QCOM_HARDWARE
 /* Query handle fm parameter*/
 #define AUDIO_PARAMETER_KEY_HANDLE_FM "handle_fm"
 
@@ -156,12 +174,14 @@ __BEGIN_DECLS
 /* Query ADSP Status */
 #define AUDIO_PARAMETER_KEY_ADSP_STATUS "ADSP_STATUS"
 
+/* Query Sound Card Status */
+#define AUDIO_PARAMETER_KEY_SND_CARD_STATUS "SND_CARD_STATUS"
+
 /* Query if Proxy can be Opend */
 #define AUDIO_CAN_OPEN_PROXY "can_open_proxy"
 
 /* Query fm volume */
 #define AUDIO_PARAMETER_KEY_FM_VOLUME "fm_volume"
-#endif
 
 /**************************************/
 
@@ -333,6 +353,19 @@ struct audio_stream_out {
     int (*get_render_position)(const struct audio_stream_out *stream,
                                uint32_t *dsp_frames);
 
+#ifndef ICS_AUDIO_BLOB
+#ifdef QCOM_DIRECTTRACK
+    /**
+     * start audio data rendering
+     */
+    int (*start)(struct audio_stream_out *stream);
+
+    /**
+     * stop audio data rendering
+     */
+    int (*stop)(struct audio_stream_out *stream);
+#endif
+
     /**
      * get the local time at which the next write to the audio driver will be presented.
      * The units are microseconds, where the epoch is decided by the local audio HAL.
@@ -348,18 +381,6 @@ struct audio_stream_out {
      */
     int (*set_callback)(struct audio_stream_out *stream,
             stream_callback_t callback, void *cookie);
-
-#ifdef QCOM_DIRECTTRACK
-    /**
-     * start audio data rendering
-     */
-    int (*start)(struct audio_stream_out *stream);
-
-    /**
-     * stop audio data rendering
-     */
-    int (*stop)(struct audio_stream_out *stream);
-#endif
 
     /**
      * Notifies to the audio driver to stop playback however the queued buffers are
@@ -405,7 +426,7 @@ struct audio_stream_out {
      *
      * Implementation of this function is mandatory for offloaded playback.
      */
-    int (*flush)(struct audio_stream_out* stream);
+   int (*flush)(struct audio_stream_out* stream);
 
     /**
      * Return a recent count of the number of audio frames presented to an external observer.
@@ -425,7 +446,7 @@ struct audio_stream_out {
      */
     int (*get_presentation_position)(const struct audio_stream_out *stream,
                                uint64_t *frames, struct timespec *timestamp);
-
+#endif
 #ifdef QCOM_DIRECTTRACK
     /**
     * return the current timestamp after quering to the driver
@@ -450,7 +471,6 @@ struct audio_stream_out {
     int (*is_buffer_available) (const struct audio_stream_out *stream,
                                      int *isAvail);
 #endif
-
 };
 typedef struct audio_stream_out audio_stream_out_t;
 
@@ -488,51 +508,61 @@ typedef struct audio_stream_in audio_stream_in_t;
 static inline size_t audio_stream_frame_size(const struct audio_stream *s)
 {
     size_t chan_samp_sz;
-#ifdef QCOM_DIRECTTRACK
+#ifdef QCOM_HARDWARE
+    audio_format_t format = s->get_format(s);
     uint32_t chan_mask = s->get_channels(s);
-    int format = s->get_format(s);
-    char *tmpparam;
-    int isParamEqual;
+    if(audio_is_output_channel(chan_mask)) {
+        if (audio_is_linear_pcm(format) &&
+                format != AUDIO_FORMAT_PCM_8_24_BIT) {
+            chan_samp_sz = audio_bytes_per_sample(format);
+            return popcount(s->get_channels(s)) * chan_samp_sz;
+        }
+        return sizeof(int8_t);
+    } else if (audio_is_input_channel(chan_mask)) {
+        char *tmpparam;
+        int isParamEqual;
 
-    if(!s)
-        return 0;
-    if (audio_is_input_channel(chan_mask)) {
+        if(!s)
+            return 0;
+
         chan_mask &= (AUDIO_CHANNEL_IN_STEREO | \
                       AUDIO_CHANNEL_IN_MONO | \
                       AUDIO_CHANNEL_IN_5POINT1);
-    }
-    tmpparam = s->get_parameters(s, "voip_flag");
-    isParamEqual = !strncmp(tmpparam,"voip_flag=1", sizeof("voip_flag=1"));
-    free(tmpparam);
-    if(isParamEqual) {
-        if(format != AUDIO_FORMAT_PCM_8_BIT)
-            return popcount(chan_mask) * sizeof(int16_t);
-        else
-            return popcount(chan_mask) * sizeof(int8_t);
-    }
 
-    switch (format) {
-    case AUDIO_FORMAT_AMR_NB:
-        chan_samp_sz = 32;
-        break;
-    case AUDIO_FORMAT_EVRC:
-        chan_samp_sz = 23;
-        break;
-    case AUDIO_FORMAT_QCELP:
-        chan_samp_sz = 35;
-        break;
-    case AUDIO_FORMAT_AMR_WB:
-        chan_samp_sz = 61;
-        break;
-    case AUDIO_FORMAT_PCM_16_BIT:
-        chan_samp_sz = sizeof(int16_t);
-        break;
-    case AUDIO_FORMAT_PCM_8_BIT:
-    default:
-        chan_samp_sz = sizeof(int8_t);
-        break;
+        tmpparam = s->get_parameters(s, "voip_flag");
+        isParamEqual = !strncmp(tmpparam,"voip_flag=1", sizeof("voip_flag=1"));
+        free(tmpparam);
+        if(isParamEqual) {
+            if(format != AUDIO_FORMAT_PCM_8_BIT)
+                return popcount(chan_mask) * sizeof(int16_t);
+            else
+                return popcount(chan_mask) * sizeof(int8_t);
+        }
+
+        switch (format) {
+
+        case AUDIO_FORMAT_AMR_NB:
+            chan_samp_sz = 32;
+            break;
+        case AUDIO_FORMAT_EVRC:
+            chan_samp_sz = 23;
+            break;
+        case AUDIO_FORMAT_QCELP:
+            chan_samp_sz = 35;
+            break;
+        case AUDIO_FORMAT_AMR_WB:
+            chan_samp_sz = 61;
+            break;
+        case AUDIO_FORMAT_PCM_16_BIT:
+            chan_samp_sz = sizeof(int16_t);
+            break;
+        case AUDIO_FORMAT_PCM_8_BIT:
+        default:
+            chan_samp_sz = sizeof(int8_t);
+            break;
+        }
+        return popcount(chan_mask) * chan_samp_sz;
     }
-    return popcount(chan_mask) * chan_samp_sz;
 #else
     audio_format_t format = s->get_format(s);
 
@@ -591,6 +621,7 @@ struct audio_hw_device {
      */
     int (*set_master_volume)(struct audio_hw_device *dev, float volume);
 
+#ifndef ICS_AUDIO_BLOB
     /**
      * Get the current master volume value for the HAL, if the HAL supports
      * master volume control.  AudioFlinger will query this value from the
@@ -599,6 +630,7 @@ struct audio_hw_device {
      * this method may leave it set to NULL.
      */
     int (*get_master_volume)(struct audio_hw_device *dev, float *volume);
+#endif
 
     /**
      * set_mode is called when the audio mode changes. AUDIO_MODE_NORMAL mode
@@ -626,25 +658,45 @@ struct audio_hw_device {
      * See also get_buffer_size which is for a particular stream.
      */
     size_t (*get_input_buffer_size)(const struct audio_hw_device *dev,
+#ifndef ICS_AUDIO_BLOB
                                     const struct audio_config *config);
+#else
+                                    uint32_t sample_rate, int format,
+                                    int channel_count);
+#endif
 
     /** This method creates and opens the audio hardware output stream */
+#ifndef ICS_AUDIO_BLOB
     int (*open_output_stream)(struct audio_hw_device *dev,
                               audio_io_handle_t handle,
                               audio_devices_t devices,
                               audio_output_flags_t flags,
                               struct audio_config *config,
                               struct audio_stream_out **stream_out);
+#else
+    int (*open_output_stream)(struct audio_hw_device *dev, uint32_t devices,
+                              int *format, uint32_t *channels,
+                              uint32_t *sample_rate,
+                              struct audio_stream_out **out);
+#endif
 
     void (*close_output_stream)(struct audio_hw_device *dev,
                                 struct audio_stream_out* stream_out);
 
     /** This method creates and opens the audio hardware input stream */
+#ifndef ICS_AUDIO_BLOB
     int (*open_input_stream)(struct audio_hw_device *dev,
                              audio_io_handle_t handle,
                              audio_devices_t devices,
                              struct audio_config *config,
                              struct audio_stream_in **stream_in);
+#else
+    int (*open_input_stream)(struct audio_hw_device *dev, uint32_t devices,
+                             int *format, uint32_t *channels,
+                             uint32_t *sample_rate,
+                             audio_in_acoustics_t acoustics,
+                             struct audio_stream_in **stream_in);
+#endif
 
     void (*close_input_stream)(struct audio_hw_device *dev,
                                struct audio_stream_in *stream_in);
@@ -652,6 +704,7 @@ struct audio_hw_device {
     /** This method dumps the state of the audio hardware */
     int (*dump)(const struct audio_hw_device *dev, int fd);
 
+#ifndef ICS_AUDIO_BLOB
     /**
      * set the audio mute status for all audio activities.  If any value other
      * than 0 is returned, the software mixer will emulate this capability.
@@ -666,6 +719,30 @@ struct audio_hw_device {
      * method may leave it set to NULL.
      */
     int (*get_master_mute)(struct audio_hw_device *dev, bool *mute);
+#endif
+
+#ifdef AUDIO_LISTEN_ENABLED
+    /** This method creates the listen session and returns handle */
+    int (*open_listen_session)(struct audio_hw_device *dev,
+                              listen_open_params_t *params,
+                              struct listen_session** handle);
+
+    /** This method closes the listen session  */
+    int (*close_listen_session)(struct audio_hw_device *dev,
+                                struct listen_session* handle);
+
+    /** This method sets the mad observer callback  */
+    int (*set_mad_observer)(struct audio_hw_device *dev,
+                            listen_callback_t cb_func);
+
+    /**
+     *   This method is used for setting listen hal specfic parameters.
+     *  If multiple paramets are set in one call and setting any one of them
+     *  fails it will return failure.
+     */
+    int (*listen_set_parameters)(struct audio_hw_device *dev,
+                                 const char *kv_pairs);
+#endif
 };
 typedef struct audio_hw_device audio_hw_device_t;
 

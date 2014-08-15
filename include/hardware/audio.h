@@ -136,6 +136,14 @@ __BEGIN_DECLS
 #define AUDIO_OFFLOAD_CODEC_DOWN_SAMPLING  "music_offload_down_sampling"
 #define AUDIO_OFFLOAD_CODEC_DELAY_SAMPLES  "delay_samples"
 #define AUDIO_OFFLOAD_CODEC_PADDING_SAMPLES  "padding_samples"
+#define AUDIO_OFFLOAD_CODEC_WMA_FORMAT_TAG "music_offload_wma_format_tag"
+#define AUDIO_OFFLOAD_CODEC_WMA_BLOCK_ALIGN "music_offload_wma_block_align"
+#define AUDIO_OFFLOAD_CODEC_WMA_BIT_PER_SAMPLE "music_offload_wma_bit_per_sample"
+#define AUDIO_OFFLOAD_CODEC_WMA_CHANNEL_MASK "music_offload_wma_channel_mask"
+#define AUDIO_OFFLOAD_CODEC_WMA_ENCODE_OPTION "music_offload_wma_encode_option"
+#define AUDIO_OFFLOAD_CODEC_WMA_ENCODE_OPTION1"music_offload_wma_encode_option1"
+#define AUDIO_OFFLOAD_CODEC_WMA_ENCODE_OPTION2 "music_offload_wma_encode_option2"
+#define AUDIO_OFFLOAD_CODEC_FORMAT "music_offload_codec_format"
 
 #ifdef QCOM_HARDWARE
 /* Query handle fm parameter*/
@@ -146,6 +154,10 @@ __BEGIN_DECLS
 
 /* Query Fluence type */
 #define AUDIO_PARAMETER_KEY_FLUENCE_TYPE "fluence"
+#define AUDIO_PARAMETER_KEY_FLUENCE "fluence"
+#define AUDIO_PARAMETER_VALUE_QUADMIC "quadmic"
+#define AUDIO_PARAMETER_VALUE_DUALMIC "dualmic"
+#define AUDIO_PARAMETER_KEY_NO_FLUENCE "none"
 
 /* Query if surround sound recording is supported */
 #define AUDIO_PARAMETER_KEY_SSR "ssr"
@@ -155,6 +167,9 @@ __BEGIN_DECLS
 
 /* Query ADSP Status */
 #define AUDIO_PARAMETER_KEY_ADSP_STATUS "ADSP_STATUS"
+
+/* Query Sound Card Status */
+#define AUDIO_PARAMETER_KEY_SND_CARD_STATUS "SND_CARD_STATUS"
 
 /* Query if Proxy can be Opend */
 #define AUDIO_CAN_OPEN_PROXY "can_open_proxy"

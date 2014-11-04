@@ -20,6 +20,7 @@
 #include <hardware/camera3.h>
 #include <hardware/gralloc.h>
 #include <system/graphics.h>
+#include <utils/Mutex.h>
 
 namespace default_camera_hal {
 // Stream represents a single input or output stream for a camera device.
@@ -41,12 +42,15 @@ class Stream {
         bool isInputType();
         bool isOutputType();
         bool isRegistered();
+        const char* typeToString(int type);
+        const char* formatToString(int format);
+        void dump(int fd);
 
         // This stream is being reused. Used in stream configuration passes
         bool mReuse;
 
     private:
-        // Clean up buffer state. must be called with mMutex held.
+        // Clean up buffer state. must be called with mLock held.
         void unregisterBuffers_L();
 
         // The camera device id this stream belongs to
@@ -72,7 +76,7 @@ class Stream {
         // Number of buffers in mBuffers
         unsigned int mNumBuffers;
         // Lock protecting the Stream object for modifications
-        pthread_mutex_t mMutex;
+        android::Mutex mLock;
 };
 } // namespace default_camera_hal
 

@@ -105,7 +105,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                          size_t bytes)
 {
     /* XXX: fake timing for audio output */
-    usleep(bytes * 1000000 / audio_stream_frame_size(&stream->common) /
+    usleep(bytes * 1000000 / audio_stream_out_frame_size(stream) /
            out_get_sample_rate(&stream->common));
     return bytes;
 }
@@ -193,7 +193,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
                        size_t bytes)
 {
     /* XXX: fake timing for audio input */
-    usleep(bytes * 1000000 / audio_stream_frame_size(&stream->common) /
+    usleep(bytes * 1000000 / audio_stream_in_frame_size(stream) /
            in_get_sample_rate(&stream->common));
     return bytes;
 }
@@ -218,7 +218,8 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
                                    audio_devices_t devices,
                                    audio_output_flags_t flags,
                                    struct audio_config *config,
-                                   struct audio_stream_out **stream_out)
+                                   struct audio_stream_out **stream_out,
+                                   const char *address __unused)
 {
     struct stub_audio_device *ladev = (struct stub_audio_device *)dev;
     struct stub_stream_out *out;
@@ -327,7 +328,10 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
                                   audio_io_handle_t handle,
                                   audio_devices_t devices,
                                   struct audio_config *config,
-                                  struct audio_stream_in **stream_in)
+                                  struct audio_stream_in **stream_in,
+                                  audio_input_flags_t flags __unused,
+                                  const char *address __unused,
+                                  audio_source_t source __unused)
 {
     struct stub_audio_device *ladev = (struct stub_audio_device *)dev;
     struct stub_stream_in *in;

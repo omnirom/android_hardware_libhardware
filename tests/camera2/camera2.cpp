@@ -172,13 +172,6 @@ class Camera2Test: public testing::Test {
         err = listener.getNotificationsFrom(dev);
         if (err != OK) return err;
 
-        vendor_tag_query_ops_t *vendor_metadata_tag_ops;
-        err = dev->ops->get_metadata_vendor_tag_ops(dev, &vendor_metadata_tag_ops);
-        if (err != OK) return err;
-
-        err = set_camera_metadata_vendor_tag_ops(vendor_metadata_tag_ops);
-        if (err != OK) return err;
-
         return OK;
     }
 
@@ -388,8 +381,10 @@ TEST_F(Camera2Test, Capture1Raw) {
 
         ASSERT_NO_FATAL_FAILURE(setUpCamera(id));
 
-        sp<BufferQueue> bq = new BufferQueue();
-        sp<CpuConsumer> rawConsumer = new CpuConsumer(bq, 1);
+        sp<IGraphicBufferProducer> bqProducer;
+        sp<IGraphicBufferConsumer> bqConsumer;
+        BufferQueue::createBufferQueue(&bqProducer, &bqConsumer);
+        sp<CpuConsumer> rawConsumer = new CpuConsumer(bqConsumer, 1);
         sp<FrameWaiter> rawWaiter = new FrameWaiter();
         rawConsumer->setFrameAvailableListener(rawWaiter);
 
@@ -420,7 +415,7 @@ TEST_F(Camera2Test, Capture1Raw) {
 
         int streamId;
         ASSERT_NO_FATAL_FAILURE(
-            setUpStream(bq, width, height, format, &streamId) );
+            setUpStream(bqProducer, width, height, format, &streamId) );
 
         camera_metadata_t *request;
         request = allocate_camera_metadata(20, 2000);
@@ -522,8 +517,10 @@ TEST_F(Camera2Test, CaptureBurstRaw) {
 
         ASSERT_NO_FATAL_FAILURE(setUpCamera(id));
 
-        sp<BufferQueue> bq = new BufferQueue();
-        sp<CpuConsumer> rawConsumer = new CpuConsumer(bq, 1);
+        sp<IGraphicBufferProducer> bqProducer;
+        sp<IGraphicBufferConsumer> bqConsumer;
+        BufferQueue::createBufferQueue(&bqProducer, &bqConsumer);
+        sp<CpuConsumer> rawConsumer = new CpuConsumer(bqConsumer, 1);
         sp<FrameWaiter> rawWaiter = new FrameWaiter();
         rawConsumer->setFrameAvailableListener(rawWaiter);
 
@@ -554,7 +551,7 @@ TEST_F(Camera2Test, CaptureBurstRaw) {
 
         int streamId;
         ASSERT_NO_FATAL_FAILURE(
-            setUpStream(bq, width, height, format, &streamId) );
+            setUpStream(bqProducer, width, height, format, &streamId) );
 
         camera_metadata_t *request;
         request = allocate_camera_metadata(20, 2000);
@@ -703,8 +700,10 @@ TEST_F(Camera2Test, Capture1Jpeg) {
 
         ASSERT_NO_FATAL_FAILURE(setUpCamera(id));
 
-        sp<BufferQueue> bq = new BufferQueue();
-        sp<CpuConsumer> jpegConsumer = new CpuConsumer(bq, 1);
+        sp<IGraphicBufferProducer> bqProducer;
+        sp<IGraphicBufferConsumer> bqConsumer;
+        BufferQueue::createBufferQueue(&bqProducer, &bqConsumer);
+        sp<CpuConsumer> jpegConsumer = new CpuConsumer(bqConsumer, 1);
         sp<FrameWaiter> jpegWaiter = new FrameWaiter();
         jpegConsumer->setFrameAvailableListener(jpegWaiter);
 
@@ -723,7 +722,7 @@ TEST_F(Camera2Test, Capture1Jpeg) {
 
         int streamId;
         ASSERT_NO_FATAL_FAILURE(
-            setUpStream(bq, width, height, format, &streamId) );
+            setUpStream(bqProducer, width, height, format, &streamId) );
 
         camera_metadata_t *request;
         request = allocate_camera_metadata(20, 2000);

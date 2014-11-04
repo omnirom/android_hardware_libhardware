@@ -45,7 +45,7 @@ typedef enum {
      */
     POWER_HINT_VIDEO_ENCODE = 0x00000003,
     POWER_HINT_VIDEO_DECODE = 0x00000004,
-
+    POWER_HINT_LOW_POWER = 0x00000005,
     POWER_HINT_CPU_BOOST = 0x00000010
 } power_hint_t;
 
@@ -113,6 +113,13 @@ typedef struct power_module {
      *     events are incoming.  CPU and GPU load may be expected soon,
      *     and it may be appropriate to raise speeds of CPU, memory bus,
      *     etc.  The data parameter is unused.
+     *
+     * POWER_HINT_LOW_POWER
+     *
+     *     Low power mode is activated or deactivated. Low power mode
+     *     is intended to save battery at the cost of performance. The data
+     *     parameter is non-zero when low power mode is activated, and zero
+     *     when deactivated.
      *
      * A particular platform may choose to ignore any hint.
      *

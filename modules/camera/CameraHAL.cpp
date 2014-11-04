@@ -17,7 +17,8 @@
 #include <cstdlib>
 #include <hardware/camera_common.h>
 #include <hardware/hardware.h>
-#include "Camera.h"
+#include "ExampleCamera.h"
+#include "VendorTags.h"
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "DefaultCameraHAL"
@@ -38,25 +39,24 @@ namespace default_camera_hal {
 
 // Default Camera HAL has 2 cameras, front and rear.
 static CameraHAL gCameraHAL(2);
+// Handle containing vendor tag functionality
+static VendorTags gVendorTags;
 
 CameraHAL::CameraHAL(int num_cameras)
   : mNumberOfCameras(num_cameras),
     mCallbacks(NULL)
 {
-    int i;
-
     // Allocate camera array and instantiate camera devices
     mCameras = new Camera*[mNumberOfCameras];
-    for (i = 0; i < mNumberOfCameras; i++) {
-        mCameras[i] = new Camera(i);
-    }
+    // Rear camera
+    mCameras[0] = new ExampleCamera(0);
+    // Front camera
+    mCameras[1] = new ExampleCamera(1);
 }
 
 CameraHAL::~CameraHAL()
 {
-    int i;
-
-    for (i = 0; i < mNumberOfCameras; i++) {
+    for (int i = 0; i < mNumberOfCameras; i++) {
         delete mCameras[i];
     }
     delete [] mCameras;
@@ -124,6 +124,41 @@ static int set_callbacks(const camera_module_callbacks_t *callbacks)
     return gCameraHAL.setCallbacks(callbacks);
 }
 
+static int get_tag_count(const vendor_tag_ops_t* ops)
+{
+    return gVendorTags.getTagCount(ops);
+}
+
+static void get_all_tags(const vendor_tag_ops_t* ops, uint32_t* tag_array)
+{
+    gVendorTags.getAllTags(ops, tag_array);
+}
+
+static const char* get_section_name(const vendor_tag_ops_t* ops, uint32_t tag)
+{
+    return gVendorTags.getSectionName(ops, tag);
+}
+
+static const char* get_tag_name(const vendor_tag_ops_t* ops, uint32_t tag)
+{
+    return gVendorTags.getTagName(ops, tag);
+}
+
+static int get_tag_type(const vendor_tag_ops_t* ops, uint32_t tag)
+{
+    return gVendorTags.getTagType(ops, tag);
+}
+
+static void get_vendor_tag_ops(vendor_tag_ops_t* ops)
+{
+    ALOGV("%s : ops=%p", __func__, ops);
+    ops->get_tag_count      = get_tag_count;
+    ops->get_all_tags       = get_all_tags;
+    ops->get_section_name   = get_section_name;
+    ops->get_tag_name       = get_tag_name;
+    ops->get_tag_type       = get_tag_type;
+}
+
 static int open_dev(const hw_module_t* mod, const char* name, hw_device_t** dev)
 {
     return gCameraHAL.open(mod, name, dev);
@@ -136,7 +171,7 @@ static hw_module_methods_t gCameraModuleMethods = {
 camera_module_t HAL_MODULE_INFO_SYM __attribute__ ((visibility("default"))) = {
     common : {
         tag                : HARDWARE_MODULE_TAG,
-        module_api_version : CAMERA_MODULE_API_VERSION_2_0,
+        module_api_version : CAMERA_MODULE_API_VERSION_2_2,
         hal_api_version    : HARDWARE_HAL_API_VERSION,
         id                 : CAMERA_HARDWARE_MODULE_ID,
         name               : "Default Camera HAL",
@@ -147,7 +182,10 @@ camera_module_t HAL_MODULE_INFO_SYM __attribute__ ((visibility("default"))) = {
     },
     get_number_of_cameras : get_number_of_cameras,
     get_camera_info       : get_camera_info,
-    set_callbacks         : set_callbacks
+    set_callbacks         : set_callbacks,
+    get_vendor_tag_ops    : get_vendor_tag_ops,
+    open_legacy           : NULL,
+    reserved              : {0},
 };
 } // extern "C"
 

@@ -17,13 +17,19 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE := audio.usb.default
-LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
+LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_SRC_FILES := \
-	audio_hw.c
+	audio_hw.c \
+	alsa_device_profile.c \
+	alsa_device_proxy.c \
+	logging.c \
+	format.c
 LOCAL_C_INCLUDES += \
-	external/tinyalsa/include
-LOCAL_SHARED_LIBRARIES := liblog libcutils libtinyalsa
+	external/tinyalsa/include \
+	$(call include-path-for, audio-utils)
+LOCAL_SHARED_LIBRARIES := liblog libcutils libtinyalsa libaudioutils
 LOCAL_MODULE_TAGS := optional
+LOCAL_CFLAGS := -Wno-unused-parameter
 
 include $(BUILD_SHARED_LIBRARY)
 

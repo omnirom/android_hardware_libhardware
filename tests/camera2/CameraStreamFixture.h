@@ -161,17 +161,19 @@ protected:
         sp<CameraDeviceBase> device = mDevice;
         CameraStreamParams p = mParam;
 
-        sp<BufferQueue> bq = new BufferQueue();
-        mCpuConsumer = new CpuConsumer(bq, p.mHeapCount);
+        sp<IGraphicBufferProducer> producer;
+        sp<IGraphicBufferConsumer> consumer;
+        BufferQueue::createBufferQueue(&producer, &consumer);
+        mCpuConsumer = new CpuConsumer(consumer, p.mHeapCount);
         mCpuConsumer->setName(String8("CameraStreamTest::mCpuConsumer"));
 
-        mNativeWindow = new Surface(bq);
+        mNativeWindow = new Surface(producer);
 
         int format = MapAutoFormat(p.mFormat);
 
         ASSERT_EQ(OK,
             device->createStream(mNativeWindow,
-                mWidth, mHeight, format, /*size (for jpegs)*/0,
+                mWidth, mHeight, format,
                 &mStreamId));
 
         ASSERT_NE(-1, mStreamId);

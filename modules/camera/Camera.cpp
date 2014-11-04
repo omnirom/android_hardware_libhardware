@@ -15,11 +15,12 @@
  */
 
 #include <cstdlib>
-#include <pthread.h>
+#include <stdio.h>
 #include <hardware/camera3.h>
 #include <sync/sync.h>
 #include <system/camera_metadata.h>
 #include <system/graphics.h>
+#include <utils/Mutex.h>
 #include "CameraHAL.h"
 #include "Metadata.h"
 #include "Stream.h"
@@ -29,14 +30,11 @@
 #include <cutils/log.h>
 
 #define ATRACE_TAG (ATRACE_TAG_CAMERA | ATRACE_TAG_HAL)
-#include <cutils/trace.h>
-#include "ScopedTrace.h"
+#include <utils/Trace.h>
 
 #include "Camera.h"
 
 #define CAMERA_SYNC_TIMEOUT 5000 // in msecs
-
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 namespace default_camera_hal {
 
@@ -59,9 +57,7 @@ Camera::Camera(int id)
     mNumStreams(0),
     mSettings(NULL)
 {
-    pthread_mutex_init(&mMutex, NULL);
-    pthread_mutex_init(&mStaticInfoMutex, NULL);
-
+    memset(&mTemplates, 0, sizeof(mTemplates));
     memset(&mDevice, 0, sizeof(mDevice));
     mDevice.common.tag    = HARDWARE_DEVICE_TAG;
     mDevice.common.version = CAMERA_DEVICE_API_VERSION_3_0;
@@ -72,17 +68,18 @@ Camera::Camera(int id)
 
 Camera::~Camera()
 {
-    pthread_mutex_destroy(&mMutex);
-    pthread_mutex_destroy(&mStaticInfoMutex);
+    if (mStaticInfo != NULL) {
+        free_camera_metadata(mStaticInfo);
+    }
 }
 
 int Camera::open(const hw_module_t *module, hw_device_t **device)
 {
     ALOGI("%s:%d: Opening camera device", __func__, mId);
-    CAMTRACE_CALL();
-    pthread_mutex_lock(&mMutex);
+    ATRACE_CALL();
+    android::Mutex::Autolock al(mDeviceLock);
+
     if (mBusy) {
-        pthread_mutex_unlock(&mMutex);
         ALOGE("%s:%d: Error! Camera device already opened", __func__, mId);
         return -EBUSY;
     }
@@ -91,208 +88,52 @@ int Camera::open(const hw_module_t *module, hw_device_t **device)
     mBusy = true;
     mDevice.common.module = const_cast<hw_module_t*>(module);
     *device = &mDevice.common;
-
-    pthread_mutex_unlock(&mMutex);
     return 0;
 }
 
 int Camera::getInfo(struct camera_info *info)
 {
+    android::Mutex::Autolock al(mStaticInfoLock);
+
     info->facing = CAMERA_FACING_FRONT;
     info->orientation = 0;
     info->device_version = mDevice.common.version;
-
-    pthread_mutex_lock(&mStaticInfoMutex);
     if (mStaticInfo == NULL) {
         mStaticInfo = initStaticInfo();
     }
-    pthread_mutex_unlock(&mStaticInfoMutex);
-
     info->static_camera_characteristics = mStaticInfo;
-
     return 0;
 }
 
 int Camera::close()
 {
     ALOGI("%s:%d: Closing camera device", __func__, mId);
-    CAMTRACE_CALL();
-    pthread_mutex_lock(&mMutex);
+    ATRACE_CALL();
+    android::Mutex::Autolock al(mDeviceLock);
+
     if (!mBusy) {
-        pthread_mutex_unlock(&mMutex);
         ALOGE("%s:%d: Error! Camera device not open", __func__, mId);
         return -EINVAL;
     }
 
     // TODO: close camera dev nodes, etc
     mBusy = false;
-
-    pthread_mutex_unlock(&mMutex);
     return 0;
 }
 
 int Camera::initialize(const camera3_callback_ops_t *callback_ops)
 {
+    int res;
+
     ALOGV("%s:%d: callback_ops=%p", __func__, mId, callback_ops);
     mCallbackOps = callback_ops;
-    // Create standard settings templates
-    // 0 is invalid as template
-    mTemplates[0] = NULL;
-    // CAMERA3_TEMPLATE_PREVIEW = 1
-    mTemplates[1] = new Metadata(ANDROID_CONTROL_MODE_OFF,
-            ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW);
-    // CAMERA3_TEMPLATE_STILL_CAPTURE = 2
-    mTemplates[2] = new Metadata(ANDROID_CONTROL_MODE_OFF,
-            ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE);
-    // CAMERA3_TEMPLATE_VIDEO_RECORD = 3
-    mTemplates[3] = new Metadata(ANDROID_CONTROL_MODE_OFF,
-            ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD);
-    // CAMERA3_TEMPLATE_VIDEO_SNAPSHOT = 4
-    mTemplates[4] = new Metadata(ANDROID_CONTROL_MODE_OFF,
-            ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT);
-    // CAMERA3_TEMPLATE_STILL_ZERO_SHUTTER_LAG = 5
-    mTemplates[5] = new Metadata(ANDROID_CONTROL_MODE_OFF,
-            ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG);
-    // Pre-generate metadata structures
-    for (int i = 1; i < CAMERA3_TEMPLATE_COUNT; i++) {
-        mTemplates[i]->generate();
+    // per-device specific initialization
+    res = initDevice();
+    if (res != 0) {
+        ALOGE("%s:%d: Failed to initialize device!", __func__, mId);
+        return res;
     }
-    // TODO: create vendor templates
     return 0;
-}
-
-camera_metadata_t *Camera::initStaticInfo()
-{
-    /*
-     * Setup static camera info.  This will have to customized per camera
-     * device.
-     */
-    Metadata m;
-
-    /* android.control */
-    int32_t android_control_ae_available_target_fps_ranges[] = {30, 30};
-    m.addInt32(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES,
-            ARRAY_SIZE(android_control_ae_available_target_fps_ranges),
-            android_control_ae_available_target_fps_ranges);
-
-    int32_t android_control_ae_compensation_range[] = {-4, 4};
-    m.addInt32(ANDROID_CONTROL_AE_COMPENSATION_RANGE,
-            ARRAY_SIZE(android_control_ae_compensation_range),
-            android_control_ae_compensation_range);
-
-    camera_metadata_rational_t android_control_ae_compensation_step[] = {{2,1}};
-    m.addRational(ANDROID_CONTROL_AE_COMPENSATION_STEP,
-            ARRAY_SIZE(android_control_ae_compensation_step),
-            android_control_ae_compensation_step);
-
-    int32_t android_control_max_regions[] = {1};
-    m.addInt32(ANDROID_CONTROL_MAX_REGIONS,
-            ARRAY_SIZE(android_control_max_regions),
-            android_control_max_regions);
-
-    /* android.jpeg */
-    int32_t android_jpeg_available_thumbnail_sizes[] = {0, 0, 128, 96};
-    m.addInt32(ANDROID_JPEG_AVAILABLE_THUMBNAIL_SIZES,
-            ARRAY_SIZE(android_jpeg_available_thumbnail_sizes),
-            android_jpeg_available_thumbnail_sizes);
-
-    /* android.lens */
-    float android_lens_info_available_focal_lengths[] = {1.0};
-    m.addFloat(ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS,
-            ARRAY_SIZE(android_lens_info_available_focal_lengths),
-            android_lens_info_available_focal_lengths);
-
-    /* android.request */
-    int32_t android_request_max_num_output_streams[] = {0, 3, 1};
-    m.addInt32(ANDROID_REQUEST_MAX_NUM_OUTPUT_STREAMS,
-            ARRAY_SIZE(android_request_max_num_output_streams),
-            android_request_max_num_output_streams);
-
-    /* android.scaler */
-    int32_t android_scaler_available_formats[] = {
-            HAL_PIXEL_FORMAT_RAW_SENSOR,
-            HAL_PIXEL_FORMAT_BLOB,
-            HAL_PIXEL_FORMAT_RGBA_8888,
-            HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
-            // These are handled by YCbCr_420_888
-            //        HAL_PIXEL_FORMAT_YV12,
-            //        HAL_PIXEL_FORMAT_YCrCb_420_SP,
-            HAL_PIXEL_FORMAT_YCbCr_420_888};
-    m.addInt32(ANDROID_SCALER_AVAILABLE_FORMATS,
-            ARRAY_SIZE(android_scaler_available_formats),
-            android_scaler_available_formats);
-
-    int64_t android_scaler_available_jpeg_min_durations[] = {1};
-    m.addInt64(ANDROID_SCALER_AVAILABLE_JPEG_MIN_DURATIONS,
-            ARRAY_SIZE(android_scaler_available_jpeg_min_durations),
-            android_scaler_available_jpeg_min_durations);
-
-    int32_t android_scaler_available_jpeg_sizes[] = {640, 480};
-    m.addInt32(ANDROID_SCALER_AVAILABLE_JPEG_SIZES,
-            ARRAY_SIZE(android_scaler_available_jpeg_sizes),
-            android_scaler_available_jpeg_sizes);
-
-    float android_scaler_available_max_digital_zoom[] = {1};
-    m.addFloat(ANDROID_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM,
-            ARRAY_SIZE(android_scaler_available_max_digital_zoom),
-            android_scaler_available_max_digital_zoom);
-
-    int64_t android_scaler_available_processed_min_durations[] = {1};
-    m.addInt64(ANDROID_SCALER_AVAILABLE_PROCESSED_MIN_DURATIONS,
-            ARRAY_SIZE(android_scaler_available_processed_min_durations),
-            android_scaler_available_processed_min_durations);
-
-    int32_t android_scaler_available_processed_sizes[] = {640, 480};
-    m.addInt32(ANDROID_SCALER_AVAILABLE_PROCESSED_SIZES,
-            ARRAY_SIZE(android_scaler_available_processed_sizes),
-            android_scaler_available_processed_sizes);
-
-    int64_t android_scaler_available_raw_min_durations[] = {1};
-    m.addInt64(ANDROID_SCALER_AVAILABLE_RAW_MIN_DURATIONS,
-            ARRAY_SIZE(android_scaler_available_raw_min_durations),
-            android_scaler_available_raw_min_durations);
-
-    int32_t android_scaler_available_raw_sizes[] = {640, 480};
-    m.addInt32(ANDROID_SCALER_AVAILABLE_RAW_SIZES,
-            ARRAY_SIZE(android_scaler_available_raw_sizes),
-            android_scaler_available_raw_sizes);
-
-    /* android.sensor */
-
-    int32_t android_sensor_info_active_array_size[] = {0, 0, 640, 480};
-    m.addInt32(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE,
-            ARRAY_SIZE(android_sensor_info_active_array_size),
-            android_sensor_info_active_array_size);
-
-    int32_t android_sensor_info_sensitivity_range[] =
-            {100, 1600};
-    m.addInt32(ANDROID_SENSOR_INFO_SENSITIVITY_RANGE,
-            ARRAY_SIZE(android_sensor_info_sensitivity_range),
-            android_sensor_info_sensitivity_range);
-
-    int64_t android_sensor_info_max_frame_duration[] = {30000000000};
-    m.addInt64(ANDROID_SENSOR_INFO_MAX_FRAME_DURATION,
-            ARRAY_SIZE(android_sensor_info_max_frame_duration),
-            android_sensor_info_max_frame_duration);
-
-    float android_sensor_info_physical_size[] = {3.2, 2.4};
-    m.addFloat(ANDROID_SENSOR_INFO_PHYSICAL_SIZE,
-            ARRAY_SIZE(android_sensor_info_physical_size),
-            android_sensor_info_physical_size);
-
-    int32_t android_sensor_info_pixel_array_size[] = {640, 480};
-    m.addInt32(ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE,
-            ARRAY_SIZE(android_sensor_info_pixel_array_size),
-            android_sensor_info_pixel_array_size);
-
-    int32_t android_sensor_orientation[] = {0};
-    m.addInt32(ANDROID_SENSOR_ORIENTATION,
-            ARRAY_SIZE(android_sensor_orientation),
-            android_sensor_orientation);
-
-    /* End of static camera characteristics */
-
-    return clone_camera_metadata(m.generate());
 }
 
 int Camera::configureStreams(camera3_stream_configuration_t *stream_config)
@@ -300,8 +141,9 @@ int Camera::configureStreams(camera3_stream_configuration_t *stream_config)
     camera3_stream_t *astream;
     Stream **newStreams = NULL;
 
-    CAMTRACE_CALL();
     ALOGV("%s:%d: stream_config=%p", __func__, mId, stream_config);
+    ATRACE_CALL();
+    android::Mutex::Autolock al(mDeviceLock);
 
     if (stream_config == NULL) {
         ALOGE("%s:%d: NULL stream configuration array", __func__, mId);
@@ -316,8 +158,6 @@ int Camera::configureStreams(camera3_stream_configuration_t *stream_config)
     newStreams = new Stream*[stream_config->num_streams];
     ALOGV("%s:%d: Number of Streams: %d", __func__, mId,
             stream_config->num_streams);
-
-    pthread_mutex_lock(&mMutex);
 
     // Mark all current streams unused for now
     for (int i = 0; i < mNumStreams; i++)
@@ -356,14 +196,11 @@ int Camera::configureStreams(camera3_stream_configuration_t *stream_config)
 
     // Clear out last seen settings metadata
     setSettings(NULL);
-
-    pthread_mutex_unlock(&mMutex);
     return 0;
 
 err_out:
     // Clean up temporary streams, preserve existing mStreams/mNumStreams
     destroyStreams(newStreams, stream_config->num_streams);
-    pthread_mutex_unlock(&mMutex);
     return -EINVAL;
 }
 
@@ -469,15 +306,20 @@ int Camera::registerStreamBuffers(const camera3_stream_buffer_set_t *buf_set)
     return stream->registerBuffers(buf_set);
 }
 
+bool Camera::isValidTemplateType(int type)
+{
+    return type < 1 || type >= CAMERA3_TEMPLATE_COUNT;
+}
+
 const camera_metadata_t* Camera::constructDefaultRequestSettings(int type)
 {
     ALOGV("%s:%d: type=%d", __func__, mId, type);
 
-    if (type < 1 || type >= CAMERA3_TEMPLATE_COUNT) {
+    if (!isValidTemplateType(type)) {
         ALOGE("%s:%d: Invalid template request type: %d", __func__, mId, type);
         return NULL;
     }
-    return mTemplates[type]->generate();
+    return mTemplates[type];
 }
 
 int Camera::processCaptureRequest(camera3_capture_request_t *request)
@@ -485,7 +327,7 @@ int Camera::processCaptureRequest(camera3_capture_request_t *request)
     camera3_capture_result result;
 
     ALOGV("%s:%d: request=%p", __func__, mId, request);
-    CAMTRACE_CALL();
+    ATRACE_CALL();
 
     if (request == NULL) {
         ALOGE("%s:%d: NULL request recieved", __func__, mId);
@@ -565,12 +407,6 @@ void Camera::setSettings(const camera_metadata_t *new_settings)
         mSettings = clone_camera_metadata(new_settings);
 }
 
-bool Camera::isValidCaptureSettings(const camera_metadata_t* /*settings*/)
-{
-    // TODO: reject settings that cannot be captured
-    return true;
-}
-
 bool Camera::isValidReprocessSettings(const camera_metadata_t* /*settings*/)
 {
     // TODO: reject settings that cannot be reprocessed
@@ -631,16 +467,65 @@ void Camera::notifyShutter(uint32_t frame_number, uint64_t timestamp)
     mCallbackOps->notify(mCallbackOps, &m);
 }
 
-void Camera::getMetadataVendorTagOps(vendor_tag_query_ops_t *ops)
-{
-    ALOGV("%s:%d: ops=%p", __func__, mId, ops);
-    // TODO: return vendor tag ops
-}
-
 void Camera::dump(int fd)
 {
     ALOGV("%s:%d: Dumping to fd %d", __func__, mId, fd);
-    // TODO: dprintf all relevant state to fd
+    ATRACE_CALL();
+    android::Mutex::Autolock al(mDeviceLock);
+
+    dprintf(fd, "Camera ID: %d (Busy: %d)\n", mId, mBusy);
+
+    // TODO: dump all settings
+    dprintf(fd, "Most Recent Settings: (%p)\n", mSettings);
+
+    dprintf(fd, "Number of streams: %d\n", mNumStreams);
+    for (int i = 0; i < mNumStreams; i++) {
+        dprintf(fd, "Stream %d/%d:\n", i, mNumStreams);
+        mStreams[i]->dump(fd);
+    }
+}
+
+const char* Camera::templateToString(int type)
+{
+    switch (type) {
+    case CAMERA3_TEMPLATE_PREVIEW:
+        return "CAMERA3_TEMPLATE_PREVIEW";
+    case CAMERA3_TEMPLATE_STILL_CAPTURE:
+        return "CAMERA3_TEMPLATE_STILL_CAPTURE";
+    case CAMERA3_TEMPLATE_VIDEO_RECORD:
+        return "CAMERA3_TEMPLATE_VIDEO_RECORD";
+    case CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:
+        return "CAMERA3_TEMPLATE_VIDEO_SNAPSHOT";
+    case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
+        return "CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG";
+    }
+    // TODO: support vendor templates
+    return "Invalid template type!";
+}
+
+int Camera::setTemplate(int type, camera_metadata_t *settings)
+{
+    android::Mutex::Autolock al(mDeviceLock);
+
+    if (!isValidTemplateType(type)) {
+        ALOGE("%s:%d: Invalid template request type: %d", __func__, mId, type);
+        return -EINVAL;
+    }
+
+    if (mTemplates[type] != NULL) {
+        ALOGE("%s:%d: Setting already constructed template type %s(%d)",
+                __func__, mId, templateToString(type), type);
+        return -EINVAL;
+    }
+
+    // Make a durable copy of the underlying metadata
+    mTemplates[type] = clone_camera_metadata(settings);
+    if (mTemplates[type] == NULL) {
+        ALOGE("%s:%d: Failed to clone metadata %p for template type %s(%d)",
+                __func__, mId, settings, templateToString(type), type);
+        return -EINVAL;
+    }
+    return 0;
 }
 
 extern "C" {
@@ -680,28 +565,30 @@ static int process_capture_request(const camera3_device_t *dev,
     return camdev_to_camera(dev)->processCaptureRequest(request);
 }
 
-static void get_metadata_vendor_tag_ops(const camera3_device_t *dev,
-        vendor_tag_query_ops_t *ops)
-{
-    camdev_to_camera(dev)->getMetadataVendorTagOps(ops);
-}
-
 static void dump(const camera3_device_t *dev, int fd)
 {
     camdev_to_camera(dev)->dump(fd);
 }
+
+static int flush(const camera3_device_t*)
+{
+    ALOGE("%s: unimplemented.", __func__);
+    return -1;
+}
+
 } // extern "C"
 
 const camera3_device_ops_t Camera::sOps = {
-    .initialize              = default_camera_hal::initialize,
-    .configure_streams       = default_camera_hal::configure_streams,
+    .initialize = default_camera_hal::initialize,
+    .configure_streams = default_camera_hal::configure_streams,
     .register_stream_buffers = default_camera_hal::register_stream_buffers,
-    .construct_default_request_settings =
-            default_camera_hal::construct_default_request_settings,
+    .construct_default_request_settings
+        = default_camera_hal::construct_default_request_settings,
     .process_capture_request = default_camera_hal::process_capture_request,
-    .get_metadata_vendor_tag_ops =
-            default_camera_hal::get_metadata_vendor_tag_ops,
-    .dump                    = default_camera_hal::dump
+    .get_metadata_vendor_tag_ops = NULL,
+    .dump = default_camera_hal::dump,
+    .flush = default_camera_hal::flush,
+    .reserved = {0},
 };
 
 } // namespace default_camera_hal

@@ -248,9 +248,6 @@ struct audio_policy {
                                 const audio_offload_info_t *info);
 };
 
-/* audio hw module handle used by load_hw_module(), open_output_on_module()
- * and open_input_on_module() */
-typedef int audio_module_handle_t;
 
 struct audio_policy_service_ops {
     /*
@@ -332,10 +329,9 @@ struct audio_policy_service_ops {
                              audio_io_handle_t output,
                              int delay_ms);
 
-    /* reroute a given stream type to the specified output */
-    int (*set_stream_output)(void *service,
-                             audio_stream_type_t stream,
-                             audio_io_handle_t output);
+    /* invalidate a stream type, causing a reroute to an unspecified new output */
+    int (*invalidate_stream)(void *service,
+                             audio_stream_type_t stream);
 
     /* function enabling to send proprietary informations directly from audio
      * policy manager to audio hardware interface. */
@@ -424,6 +420,12 @@ typedef struct audio_policy_module {
 } audio_policy_module_t;
 
 struct audio_policy_device {
+    /**
+     * Common methods of the audio policy device.  This *must* be the first member of
+     * audio_policy_device as users of this structure will cast a hw_device_t to
+     * audio_policy_device pointer in contexts where it's known the hw_device_t references an
+     * audio_policy_device.
+     */
     struct hw_device_t common;
 
     int (*create_audio_policy)(const struct audio_policy_device *device,

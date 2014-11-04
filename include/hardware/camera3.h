@@ -21,19 +21,26 @@
 #include "camera_common.h"
 
 /**
- * Camera device HAL 3.1 [ CAMERA_DEVICE_API_VERSION_3_1 ]
+ * Camera device HAL 3.2 [ CAMERA_DEVICE_API_VERSION_3_2 ]
  *
- * EXPERIMENTAL.
+ * This is the current recommended version of the camera device HAL.
  *
- * Supports the android.hardware.Camera API.
+ * Supports the android.hardware.Camera API, and as of v3.2, the
+ * android.hardware.camera2 API in LIMITED or FULL modes.
  *
  * Camera devices that support this version of the HAL must return
- * CAMERA_DEVICE_API_VERSION_3_1 in camera_device_t.common.version and in
+ * CAMERA_DEVICE_API_VERSION_3_2 in camera_device_t.common.version and in
  * camera_info_t.device_version (from camera_module_t.get_camera_info).
  *
- * Camera modules that may contain version 3.1 devices must implement at least
- * version 2.0 of the camera module interface (as defined by
- * camera_module_t.common.module_api_version).
+ * CAMERA_DEVICE_API_VERSION_3_2:
+ *    Camera modules that may contain version 3.2 devices must implement at
+ *    least version 2.2 of the camera module interface (as defined by
+ *    camera_module_t.common.module_api_version).
+ *
+ * <= CAMERA_DEVICE_API_VERSION_3_1:
+ *    Camera modules that may contain version 3.1 (or 3.0) devices must
+ *    implement at least version 2.0 of the camera module interface
+ *    (as defined by camera_module_t.common.module_api_version).
  *
  * See camera_common.h for more versioning details.
  *
@@ -44,6 +51,9 @@
  *   S4. 3A modes and state machines
  *   S5. Cropping
  *   S6. Error management
+ *   S7. Key Performance Indicator (KPI) glossary
+ *   S8. Sample Use Cases
+ *   S9. Notes on Controls and Metadata
  */
 
 /**
@@ -88,6 +98,27 @@
  *   - configure_streams passes consumer usage flags to the HAL.
  *
  *   - flush call to drop all in-flight requests/buffers as fast as possible.
+ *
+ * 3.2: Minor revision of expanded-capability HAL:
+ *
+ *   - Deprecates get_metadata_vendor_tag_ops.  Please use get_vendor_tag_ops
+ *     in camera_common.h instead.
+ *
+ *   - register_stream_buffers deprecated. All gralloc buffers provided
+ *     by framework to HAL in process_capture_request may be new at any time.
+ *
+ *   - add partial result support. process_capture_result may be called
+ *     multiple times with a subset of the available result before the full
+ *     result is available.
+ *
+ *   - add manual template to camera3_request_template. The applications may
+ *     use this template to control the capture settings directly.
+ *
+ *   - Rework the bidirectional and input stream specifications.
+ *
+ *   - change the input buffer return path. The buffer is returned in
+ *     process_capture_result instead of process_capture_request.
+ *
  */
 
 /**
@@ -108,12 +139,19 @@
  * 4. The framework calls camera3_device_t->ops->configure_streams() with a list
  *    of input/output streams to the HAL device.
  *
- * 5. The framework allocates gralloc buffers and calls
+ * 5. <= CAMERA_DEVICE_API_VERSION_3_1:
+ *
+ *    The framework allocates gralloc buffers and calls
  *    camera3_device_t->ops->register_stream_buffers() for at least one of the
  *    output streams listed in configure_streams. The same stream is registered
  *    only once.
  *
- * 5. The framework requests default settings for some number of use cases with
+ *    >= CAMERA_DEVICE_API_VERSION_3_2:
+ *
+ *    camera3_device_t->ops->register_stream_buffers() is not called and must
+ *    be NULL.
+ *
+ * 6. The framework requests default settings for some number of use cases with
  *    calls to camera3_device_t->ops->construct_default_request_settings(). This
  *    may occur any time after step 3.
  *
@@ -124,22 +162,63 @@
  *    camera3_device_t->ops->process_capture_request(). The HAL must block the
  *    return of this call until it is ready for the next request to be sent.
  *
- * 8. The framework continues to submit requests, and possibly call
- *    register_stream_buffers() for not-yet-registered streams, and call
+ *    >= CAMERA_DEVICE_API_VERSION_3_2:
+ *
+ *    The buffer_handle_t provided in the camera3_stream_buffer_t array
+ *    in the camera3_capture_request_t may be new and never-before-seen
+ *    by the HAL on any given new request.
+ *
+ * 8. The framework continues to submit requests, and call
  *    construct_default_request_settings to get default settings buffers for
  *    other use cases.
+ *
+ *    <= CAMERA_DEVICE_API_VERSION_3_1:
+ *
+ *    The framework may call register_stream_buffers() at this time for
+ *    not-yet-registered streams.
  *
  * 9. When the capture of a request begins (sensor starts exposing for the
  *    capture), the HAL calls camera3_callback_ops_t->notify() with the SHUTTER
  *    event, including the frame number and the timestamp for start of exposure.
+ *
+ *    <= CAMERA_DEVICE_API_VERSION_3_1:
+ *
  *    This notify call must be made before the first call to
  *    process_capture_result() for that frame number.
+ *
+ *    >= CAMERA_DEVICE_API_VERSION_3_2:
+ *
+ *    The camera3_callback_ops_t->notify() call with the SHUTTER event should
+ *    be made as early as possible since the framework will be unable to
+ *    deliver gralloc buffers to the application layer (for that frame) until
+ *    it has a valid timestamp for the start of exposure.
+ *
+ *    Both partial metadata results and the gralloc buffers may be sent to the
+ *    framework at any time before or after the SHUTTER event.
  *
  * 10. After some pipeline delay, the HAL begins to return completed captures to
  *    the framework with camera3_callback_ops_t->process_capture_result(). These
  *    are returned in the same order as the requests were submitted. Multiple
  *    requests can be in flight at once, depending on the pipeline depth of the
  *    camera HAL device.
+ *
+ *    >= CAMERA_DEVICE_API_VERSION_3_2:
+ *
+ *    Once a buffer is returned by process_capture_result as part of the
+ *    camera3_stream_buffer_t array, and the fence specified by release_fence
+ *    has been signaled (this is a no-op for -1 fences), the ownership of that
+ *    buffer is considered to be transferred back to the framework. After that,
+ *    the HAL must no longer retain that particular buffer, and the
+ *    framework may clean up the memory for it immediately.
+ *
+ *    process_capture_result may be called multiple times for a single frame,
+ *    each time with a new disjoint piece of metadata and/or set of gralloc
+ *    buffers. The framework will accumulate these partial metadata results
+ *    into one result.
+ *
+ *    In particular, it is legal for a process_capture_result to be called
+ *    simultaneously for both a frame N and a frame N+1 as long as the
+ *    above rule holds for gralloc buffers (both input and output).
  *
  * 11. After some time, the framework may stop submitting new requests, wait for
  *    the existing captures to complete (all buffers filled, all results
@@ -201,30 +280,26 @@
  *   for processing rate).
  *
  * - Limited-mode devices do not need to support most of the
- *   settings/result/static info metadata. Full-mode devices must support all
- *   metadata fields listed in TODO. Specifically, only the following settings
+ *   settings/result/static info metadata. Specifically, only the following settings
  *   are expected to be consumed or produced by a limited-mode HAL device:
  *
- *   android.control.aeAntibandingMode (controls)
- *   android.control.aeExposureCompensation (controls)
- *   android.control.aeLock (controls)
- *   android.control.aeMode (controls)
- *       [OFF means ON_FLASH_TORCH - TODO]
- *   android.control.aeRegions (controls)
- *   android.control.aeTargetFpsRange (controls)
- *   android.control.afMode (controls)
- *       [OFF means infinity focus]
- *   android.control.afRegions (controls)
- *   android.control.awbLock (controls)
- *   android.control.awbMode (controls)
- *       [OFF not supported]
- *   android.control.awbRegions (controls)
- *   android.control.captureIntent (controls)
- *   android.control.effectMode (controls)
- *   android.control.mode (controls)
- *       [OFF not supported]
- *   android.control.sceneMode (controls)
- *   android.control.videoStabilizationMode (controls)
+ *   android.control.aeAntibandingMode (controls and dynamic)
+ *   android.control.aeExposureCompensation (controls and dynamic)
+ *   android.control.aeLock (controls and dynamic)
+ *   android.control.aeMode (controls and dynamic)
+ *   android.control.aeRegions (controls and dynamic)
+ *   android.control.aeTargetFpsRange (controls and dynamic)
+ *   android.control.aePrecaptureTrigger (controls and dynamic)
+ *   android.control.afMode (controls and dynamic)
+ *   android.control.afRegions (controls and dynamic)
+ *   android.control.awbLock (controls and dynamic)
+ *   android.control.awbMode (controls and dynamic)
+ *   android.control.awbRegions (controls and dynamic)
+ *   android.control.captureIntent (controls and dynamic)
+ *   android.control.effectMode (controls and dynamic)
+ *   android.control.mode (controls and dynamic)
+ *   android.control.sceneMode (controls and dynamic)
+ *   android.control.videoStabilizationMode (controls and dynamic)
  *   android.control.aeAvailableAntibandingModes (static)
  *   android.control.aeAvailableModes (static)
  *   android.control.aeAvailableTargetFpsRanges (static)
@@ -237,66 +312,49 @@
  *   android.control.awbAvailableModes (static)
  *   android.control.maxRegions (static)
  *   android.control.sceneModeOverrides (static)
- *   android.control.aeRegions (dynamic)
  *   android.control.aeState (dynamic)
- *   android.control.afMode (dynamic)
- *   android.control.afRegions (dynamic)
  *   android.control.afState (dynamic)
- *   android.control.awbMode (dynamic)
- *   android.control.awbRegions (dynamic)
  *   android.control.awbState (dynamic)
- *   android.control.mode (dynamic)
  *
+ *   android.flash.mode (controls and dynamic)
  *   android.flash.info.available (static)
  *
  *   android.info.supportedHardwareLevel (static)
  *
- *   android.jpeg.gpsCoordinates (controls)
- *   android.jpeg.gpsProcessingMethod (controls)
- *   android.jpeg.gpsTimestamp (controls)
- *   android.jpeg.orientation (controls)
- *   android.jpeg.quality (controls)
- *   android.jpeg.thumbnailQuality (controls)
- *   android.jpeg.thumbnailSize (controls)
+ *   android.jpeg.gpsCoordinates (controls and dynamic)
+ *   android.jpeg.gpsProcessingMethod (controls and dynamic)
+ *   android.jpeg.gpsTimestamp (controls and dynamic)
+ *   android.jpeg.orientation (controls and dynamic)
+ *   android.jpeg.quality (controls and dynamic)
+ *   android.jpeg.thumbnailQuality (controls and dynamic)
+ *   android.jpeg.thumbnailSize (controls and dynamic)
  *   android.jpeg.availableThumbnailSizes (static)
  *   android.jpeg.maxSize (static)
- *   android.jpeg.gpsCoordinates (dynamic)
- *   android.jpeg.gpsProcessingMethod (dynamic)
- *   android.jpeg.gpsTimestamp (dynamic)
- *   android.jpeg.orientation (dynamic)
- *   android.jpeg.quality (dynamic)
- *   android.jpeg.size (dynamic)
- *   android.jpeg.thumbnailQuality (dynamic)
- *   android.jpeg.thumbnailSize (dynamic)
  *
  *   android.lens.info.minimumFocusDistance (static)
  *
- *   android.request.id (controls)
- *   android.request.id (dynamic)
+ *   android.request.id (controls and dynamic)
  *
- *   android.scaler.cropRegion (controls)
- *       [ignores (x,y), assumes center-zoom]
- *   android.scaler.availableFormats (static)
- *       [RAW not supported]
- *   android.scaler.availableJpegMinDurations (static)
- *   android.scaler.availableJpegSizes (static)
+ *   android.scaler.cropRegion (controls and dynamic)
+ *   android.scaler.availableStreamConfigurations (static)
+ *   android.scaler.availableMinFrameDurations (static)
+ *   android.scaler.availableStallDurations (static)
  *   android.scaler.availableMaxDigitalZoom (static)
- *   android.scaler.availableProcessedMinDurations (static)
- *   android.scaler.availableProcessedSizes (static)
- *       [full resolution not supported]
  *   android.scaler.maxDigitalZoom (static)
- *   android.scaler.cropRegion (dynamic)
+ *   android.scaler.croppingType (static)
  *
  *   android.sensor.orientation (static)
  *   android.sensor.timestamp (dynamic)
  *
- *   android.statistics.faceDetectMode (controls)
+ *   android.statistics.faceDetectMode (controls and dynamic)
  *   android.statistics.info.availableFaceDetectModes (static)
- *   android.statistics.faceDetectMode (dynamic)
  *   android.statistics.faceIds (dynamic)
  *   android.statistics.faceLandmarks (dynamic)
  *   android.statistics.faceRectangles (dynamic)
  *   android.statistics.faceScores (dynamic)
+ *
+ *   android.sync.frameNumber (dynamic)
+ *   android.sync.maxLatency (static)
  *
  * - Captures in limited mode that include high-resolution (> 1080p) output
  *   buffers may block in process_capture_request() until all the output buffers
@@ -307,6 +365,14 @@
  *   process_capture_request() to block until after process_capture_result() for
  *   that request completes for high-resolution captures for limited-mode
  *   devices.
+ *
+ * - Full-mode devices must support below additional capabilities:
+ *   - 30fps at maximum resolution is preferred, more than 20fps is required.
+ *   - Per frame control (android.sync.maxLatency == PER_FRAME_CONTROL).
+ *   - Sensor manual control metadata. See MANUAL_SENSOR defined in
+ *     android.request.availableCapabilities.
+ *   - Post-processing manual control metadata. See MANUAL_POST_PROCESSING defined
+ *     in android.request.availableCapabilities.
  *
  */
 
@@ -816,7 +882,12 @@
  * view it is receiving based on the crop region, the dimensions of the image
  * sensor, and the lens focal length.
  *
- * Since the crop region applies to all streams, which may have different aspect
+ * It is assumed that the cropping is applied after raw to other color space
+ * conversion. Raw streams (RAW16 and RAW_OPAQUE) don't have this conversion stage,
+ * and are not croppable. Therefore, the crop region must be ignored by the HAL
+ * for raw streams.
+ *
+ * Since the crop region applies to all non-raw streams, which may have different aspect
  * ratios than the crop region, the exact sensor region used for each stream may
  * be smaller than the crop region. Specifically, each stream should maintain
  * square pixels and its aspect ratio by minimally further cropping the defined
@@ -963,15 +1034,136 @@
  *   ERROR_BUFFER for each failed buffer.
  *
  * In each of these transient failure cases, the HAL must still call
- * process_capture_result, with valid output buffer_handle_t. If the result
- * metadata could not be produced, it should be NULL. If some buffers could not
- * be filled, their sync fences must be set to the error state.
+ * process_capture_result, with valid output and input (if an input buffer was
+ * submitted) buffer_handle_t. If the result metadata could not be produced, it
+ * should be NULL. If some buffers could not be filled, they must be returned with
+ * process_capture_result in the error state, their release fences must be set to
+ * the acquire fences passed by the framework, or -1 if they have been waited on by
+ * the HAL already.
  *
  * Invalid input arguments result in -EINVAL from the appropriate methods. In
  * that case, the framework must act as if that call had never been made.
  *
  */
 
+/**
+ * S7. Key Performance Indicator (KPI) glossary:
+ *
+ * This includes some critical definitions that are used by KPI metrics.
+ *
+ * Pipeline Latency:
+ *  For a given capture request, the duration from the framework calling
+ *  process_capture_request to the HAL sending capture result and all buffers
+ *  back by process_capture_result call. To make the Pipeline Latency measure
+ *  independent of frame rate, it is measured by frame count.
+ *
+ *  For example, when frame rate is 30 (fps), the frame duration (time interval
+ *  between adjacent frame capture time) is 33 (ms).
+ *  If it takes 5 frames for framework to get the result and buffers back for
+ *  a given request, then the Pipeline Latency is 5 (frames), instead of
+ *  5 x 33 = 165 (ms).
+ *
+ *  The Pipeline Latency is determined by android.request.pipelineDepth and
+ *  android.request.pipelineMaxDepth, see their definitions for more details.
+ *
+ */
+
+/**
+ * S8. Sample Use Cases:
+ *
+ * This includes some typical use case examples the camera HAL may support.
+ *
+ * S8.1 Zero Shutter Lag (ZSL) with CAMERA3_STREAM_INPUT stream.
+ *
+ *   When Zero Shutter Lag (ZSL) is supported by the camera device, the INPUT stream
+ *   can be used for application/framework implemented ZSL use case. This kind of stream
+ *   will be used by the framework as follows:
+ *
+ *   1. Framework configures an opaque raw format output stream that is used to
+ *      produce the ZSL output buffers. The stream pixel format will be
+ *      HAL_PIXEL_FORMAT_RAW_OPAQUE.
+ *
+ *   2. Framework configures an opaque raw format input stream that is used to
+ *      send the reprocess ZSL buffers to the HAL. The stream pixel format will
+ *      also be HAL_PIXEL_FORMAT_RAW_OPAQUE.
+ *
+ *   3. Framework configures a YUV/JPEG output stream that is used to receive the
+ *      reprocessed data. The stream pixel format will be YCbCr_420/HAL_PIXEL_FORMAT_BLOB.
+ *
+ *   4. Framework picks a ZSL buffer from the output stream when a ZSL capture is
+ *      issued by the application, and sends the data back as an input buffer in a
+ *      reprocessing request, then sends to the HAL for reprocessing.
+ *
+ *   5. The HAL sends back the output JPEG result to framework.
+ *
+ *   The HAL can select the actual raw buffer format and configure the ISP pipeline
+ *   appropriately based on the HAL_PIXEL_FORMAT_RAW_OPAQUE format. See this format
+ *   definition for more details.
+ *
+ * S8.2 Zero Shutter Lag (ZSL) with CAMERA3_STREAM_BIDIRECTIONAL stream.
+ *
+ *   For this use case, the bidirectional stream will be used by the framework as follows:
+ *
+ *   1. The framework includes a buffer from this stream as output buffer in a
+ *      request as normal.
+ *
+ *   2. Once the HAL device returns a filled output buffer to the framework,
+ *      the framework may do one of two things with the filled buffer:
+ *
+ *   2. a. The framework uses the filled data, and returns the now-used buffer
+ *         to the stream queue for reuse. This behavior exactly matches the
+ *         OUTPUT type of stream.
+ *
+ *   2. b. The framework wants to reprocess the filled data, and uses the
+ *         buffer as an input buffer for a request. Once the HAL device has
+ *         used the reprocessing buffer, it then returns it to the
+ *         framework. The framework then returns the now-used buffer to the
+ *         stream queue for reuse.
+ *
+ *   3. The HAL device will be given the buffer again as an output buffer for
+ *        a request at some future point.
+ *
+ *   For ZSL use case, the pixel format for bidirectional stream will be
+ *   HAL_PIXEL_FORMAT_RAW_OPAQUE or HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED if it
+ *   is listed in android.scaler.availableInputOutputFormatsMap. When
+ *   HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED is used, the gralloc
+ *   usage flags for the consumer endpoint will be set to GRALLOC_USAGE_HW_CAMERA_ZSL.
+ *   A configuration stream list that has BIDIRECTIONAL stream used as input, will
+ *   usually also have a distinct OUTPUT stream to get the reprocessing data. For example,
+ *   for the ZSL use case, the stream list might be configured with the following:
+ *
+ *     - A HAL_PIXEL_FORMAT_RAW_OPAQUE bidirectional stream is used
+ *       as input.
+ *     - And a HAL_PIXEL_FORMAT_BLOB (JPEG) output stream.
+ *
+ */
+
+/**
+ *   S9. Notes on Controls and Metadata
+ *
+ *   This section contains notes about the interpretation and usage of various metadata tags.
+ *
+ *   S9.1 HIGH_QUALITY and FAST modes.
+ *
+ *   Many camera post-processing blocks may be listed as having HIGH_QUALITY,
+ *   FAST, and OFF operating modes. These blocks will typically also have an
+ *   'available modes' tag representing which of these operating modes are
+ *   available on a given device. The general policy regarding implementing
+ *   these modes is as follows:
+ *
+ *   1. Operating mode controls of hardware blocks that cannot be disabled
+ *      must not list OFF in their corresponding 'available modes' tags.
+ *
+ *   2. OFF will always be included in their corresponding 'available modes'
+ *      tag if it is possible to disable that hardware block.
+ *
+ *   3. FAST must always be included in the 'available modes' tags for all
+ *      post-processing blocks supported on the device.  If a post-processing
+ *      block also has a slower and higher quality operating mode that does
+ *      not meet the framerate requirements for FAST mode, HIGH_QUALITY should
+ *      be included in the 'available modes' tag to represent this operating
+ *      mode.
+ */
 __BEGIN_DECLS
 
 struct camera3_device;
@@ -1006,6 +1198,21 @@ typedef enum camera3_stream_type {
      * for reading buffers from this stream and sending them through the camera
      * processing pipeline, as if the buffer was a newly captured image from the
      * imager.
+     *
+     * The pixel format for input stream can be any format reported by
+     * android.scaler.availableInputOutputFormatsMap. The pixel format of the
+     * output stream that is used to produce the reprocessing data may be any
+     * format reported by android.scaler.availableStreamConfigurations. The
+     * supported input/output stream combinations depends the camera device
+     * capabilities, see android.scaler.availableInputOutputFormatsMap for
+     * stream map details.
+     *
+     * This kind of stream is generally used to reprocess data into higher
+     * quality images (that otherwise would cause a frame rate performance
+     * loss), or to do off-line reprocessing.
+     *
+     * A typical use case is Zero Shutter Lag (ZSL), see S8.1 for more details.
+     *
      */
     CAMERA3_STREAM_INPUT = 1,
 
@@ -1014,29 +1221,9 @@ typedef enum camera3_stream_type {
      * used as an output stream, but occasionally one already-filled buffer may
      * be sent back to the HAL device for reprocessing.
      *
-     * This kind of stream is meant generally for zero-shutter-lag features,
-     * where copying the captured image from the output buffer to the
-     * reprocessing input buffer would be expensive. The stream will be used by
-     * the framework as follows:
-     *
-     * 1. The framework includes a buffer from this stream as output buffer in a
-     *    request as normal.
-     *
-     * 2. Once the HAL device returns a filled output buffer to the framework,
-     *    the framework may do one of two things with the filled buffer:
-     *
-     * 2. a. The framework uses the filled data, and returns the now-used buffer
-     *       to the stream queue for reuse. This behavior exactly matches the
-     *       OUTPUT type of stream.
-     *
-     * 2. b. The framework wants to reprocess the filled data, and uses the
-     *       buffer as an input buffer for a request. Once the HAL device has
-     *       used the reprocessing buffer, it then returns it to the
-     *       framework. The framework then returns the now-used buffer to the
-     *       stream queue for reuse.
-     *
-     * 3. The HAL device will be given the buffer again as an output buffer for
-     *    a request at some future point.
+     * This kind of stream is meant generally for Zero Shutter Lag (ZSL)
+     * features, where copying the captured image from the output buffer to the
+     * reprocessing input buffer would be expensive. See S8.2 for more details.
      *
      * Note that the HAL will always be reprocessing data it produced.
      *
@@ -1105,9 +1292,17 @@ typedef struct camera3_stream {
      * gralloc module will select a format based on the usage flags provided by
      * the camera device and the other endpoint of the stream.
      *
+     * <= CAMERA_DEVICE_API_VERSION_3_1:
+     *
      * The camera HAL device must inspect the buffers handed to it in the
      * subsequent register_stream_buffers() call to obtain the
      * implementation-specific format details, if necessary.
+     *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * register_stream_buffers() won't be called by the framework, so the HAL
+     * should configure the ISP and sensor pipeline based purely on the sizes,
+     * usage flags, and formats for the configured streams.
      */
     int format;
 
@@ -1257,6 +1452,14 @@ typedef struct camera3_stream_buffer {
      *
      * For input buffers, the HAL must not change the acquire_fence field during
      * the process_capture_request() call.
+     *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * When the HAL returns an input buffer to the framework with
+     * process_capture_result(), the acquire_fence must be set to -1. If the HAL
+     * never waits on input buffer acquire fence due to an error, the sync
+     * fences should be handled similarly to the way they are handled for output
+     * buffers.
      */
      int acquire_fence;
 
@@ -1265,10 +1468,25 @@ typedef struct camera3_stream_buffer {
      * returning buffers to the framework, or write -1 to indicate that no
      * waiting is required for this buffer.
      *
-     * For the input buffer, the release fence must be set by the
-     * process_capture_request() call. For the output buffers, the fences must
-     * be set in the output_buffers array passed to process_capture_result().
+     * For the output buffers, the fences must be set in the output_buffers
+     * array passed to process_capture_result().
      *
+     * <= CAMERA_DEVICE_API_VERSION_3_1:
+     *
+     * For the input buffer, the release fence must be set by the
+     * process_capture_request() call.
+     *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * For the input buffer, the fences must be set in the input_buffer
+     * passed to process_capture_result().
+     *
+     * After signaling the release_fence for this buffer, the HAL
+     * should not make any further attempts to access this buffer as the
+     * ownership has been fully transferred back to the framework.
+     *
+     * If a fence of -1 was specified then the ownership of this buffer
+     * is transferred back immediately upon the call of process_capture_result.
      */
     int release_fence;
 
@@ -1280,6 +1498,12 @@ typedef struct camera3_stream_buffer {
  * The complete set of gralloc buffers for a stream. This structure is given to
  * register_stream_buffers() to allow the camera HAL device to register/map/etc
  * newly allocated stream buffers.
+ *
+ * >= CAMERA_DEVICE_API_VERSION_3_2:
+ *
+ * Deprecated (and not used). In particular,
+ * register_stream_buffers is also deprecated and will never be invoked.
+ *
  */
 typedef struct camera3_stream_buffer_set {
     /**
@@ -1309,17 +1533,18 @@ typedef struct camera3_stream_buffer_set {
  * Transport header for compressed JPEG buffers in output streams.
  *
  * To capture JPEG images, a stream is created using the pixel format
- * HAL_PIXEL_FORMAT_BLOB, and the static metadata field android.jpeg.maxSize is
- * used as the buffer size. Since compressed JPEG images are of variable size,
- * the HAL needs to include the final size of the compressed image using this
- * structure inside the output stream buffer. The JPEG blob ID field must be set
- * to CAMERA3_JPEG_BLOB_ID.
+ * HAL_PIXEL_FORMAT_BLOB. The buffer size for the stream is calculated by the
+ * framework, based on the static metadata field android.jpeg.maxSize. Since
+ * compressed JPEG images are of variable size, the HAL needs to include the
+ * final size of the compressed image using this structure inside the output
+ * stream buffer. The JPEG blob ID field must be set to CAMERA3_JPEG_BLOB_ID.
  *
- * Transport header should be at the end of the JPEG output stream buffer.  That
- * means the jpeg_blob_id must start at byte[android.jpeg.maxSize -
- * sizeof(camera3_jpeg_blob)].  Any HAL using this transport header must
- * account for it in android.jpeg.maxSize.  The JPEG data itself starts at
- * the beginning of the buffer and should be jpeg_size bytes long.
+ * Transport header should be at the end of the JPEG output stream buffer. That
+ * means the jpeg_blob_id must start at byte[buffer_size -
+ * sizeof(camera3_jpeg_blob)], where the buffer_size is the size of gralloc buffer.
+ * Any HAL using this transport header must account for it in android.jpeg.maxSize
+ * The JPEG data itself starts at the beginning of the buffer and should be
+ * jpeg_size bytes long.
  */
 typedef struct camera3_jpeg_blob {
     uint16_t jpeg_blob_id;
@@ -1534,6 +1759,16 @@ typedef enum camera3_request_template {
      */
     CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG = 5,
 
+    /**
+     * A basic template for direct application control of capture
+     * parameters. All automatic control is disabled (auto-exposure, auto-white
+     * balance, auto-focus), and post-processing parameters are set to preview
+     * quality. The manual capture parameters (exposure, sensitivity, etc.)
+     * are set to reasonable defaults, but should be overridden by the
+     * application depending on the intended use case.
+     */
+    CAMERA3_TEMPLATE_MANUAL = 6,
+
     /* Total number of templates */
     CAMERA3_TEMPLATE_COUNT,
 
@@ -1592,8 +1827,15 @@ typedef struct camera3_capture_request {
      * The HAL is required to wait on the acquire sync fence of the input buffer
      * before accessing it.
      *
+     * <= CAMERA_DEVICE_API_VERSION_3_1:
+     *
      * Any input buffer included here will have been registered with the HAL
      * through register_stream_buffers() before its inclusion in a request.
+     *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * The buffers will not have been pre-registered with the HAL.
+     * Subsequent requests may reuse buffers, or provide entirely new buffers.
      */
     camera3_stream_buffer_t *input_buffer;
 
@@ -1606,13 +1848,21 @@ typedef struct camera3_capture_request {
     /**
      * An array of num_output_buffers stream buffers, to be filled with image
      * data from this capture/reprocess. The HAL must wait on the acquire fences
-     * of each stream buffer before writing to them. All the buffers included
-     * here will have been registered with the HAL through
-     * register_stream_buffers() before their inclusion in a request.
+     * of each stream buffer before writing to them.
      *
      * The HAL takes ownership of the actual buffer_handle_t entries in
      * output_buffers; the framework does not access them until they are
      * returned in a camera3_capture_result_t.
+     *
+     * <= CAMERA_DEVICE_API_VERSION_3_1:
+     *
+     * All the buffers included  here will have been registered with the HAL
+     * through register_stream_buffers() before their inclusion in a request.
+     *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * Any or all of the buffers included here may be brand new in this
+     * request (having never before seen by the HAL).
      */
     const camera3_stream_buffer_t *output_buffers;
 
@@ -1625,7 +1875,9 @@ typedef struct camera3_capture_request {
  * sent to the framework asynchronously with process_capture_result(), in
  * response to a single capture request sent to the HAL with
  * process_capture_request(). Multiple process_capture_result() calls may be
- * performed by the HAL for each request. Each call, all with the same frame
+ * performed by the HAL for each request.
+ *
+ * Each call, all with the same frame
  * number, may contain some subset of the output buffers, and/or the result
  * metadata. The metadata may only be provided once for a given frame number;
  * all other calls must set the result metadata to NULL.
@@ -1634,6 +1886,29 @@ typedef struct camera3_capture_request {
  * set of output buffers that have been/will be filled for this capture. Each
  * output buffer may come with a release sync fence that the framework will wait
  * on before reading, in case the buffer has not yet been filled by the HAL.
+ *
+ * >= CAMERA_DEVICE_API_VERSION_3_2:
+ *
+ * The metadata may be provided multiple times for a single frame number. The
+ * framework will accumulate together the final result set by combining each
+ * partial result together into the total result set.
+ *
+ * If an input buffer is given in a request, the HAL must return it in one of
+ * the process_capture_result calls, and the call may be to just return the input
+ * buffer, without metadata and output buffers; the sync fences must be handled
+ * the same way they are done for output buffers.
+ *
+ *
+ * Performance considerations:
+ *
+ * Applications will also receive these partial results immediately, so sending
+ * partial results is a highly recommended performance optimization to avoid
+ * the total pipeline latency before sending the results for what is known very
+ * early on in the pipeline.
+ *
+ * A typical use case might be calculating the AF state halfway through the
+ * pipeline; by sending the state back to the framework immediately, we get a
+ * 50% performance increase and perceived responsiveness of the auto-focus.
  *
  */
 typedef struct camera3_capture_result {
@@ -1657,6 +1932,18 @@ typedef struct camera3_capture_result {
      *
      * If there was an error producing the result metadata, result must be an
      * empty metadata buffer, and notify() must be called with ERROR_RESULT.
+     *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * Multiple calls to process_capture_result() with a given frame_number
+     * may include the result metadata.
+     *
+     * Partial metadata submitted should not include any metadata key returned
+     * in a previous partial result for a given frame. Each new partial result
+     * for that frame must also set a distinct partial_result value.
+     *
+     * If notify has been called with ERROR_RESULT, all further partial
+     * results for that frame are ignored by the framework.
      */
     const camera_metadata_t *result;
 
@@ -1666,7 +1953,8 @@ typedef struct camera3_capture_result {
      * less than the buffer count in the capture request, at least one more call
      * to process_capture_result with the same frame_number must be made, to
      * return the remaining output buffers to the framework. This may only be
-     * zero if the structure includes valid result metadata.
+     * zero if the structure includes valid result metadata or an input buffer
+     * is returned in this result.
      */
     uint32_t num_output_buffers;
 
@@ -1690,8 +1978,70 @@ typedef struct camera3_capture_result {
      * num_output_buffers is zero, this may be NULL. In that case, at least one
      * more process_capture_result call must be made by the HAL to provide the
      * output buffers.
+     *
+     * When process_capture_result is called with a new buffer for a frame,
+     * all previous frames' buffers for that corresponding stream must have been
+     * already delivered (the fences need not have yet been signaled).
+     *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * Gralloc buffers for a frame may be sent to framework before the
+     * corresponding SHUTTER-notify.
+     *
+     * Performance considerations:
+     *
+     * Buffers delivered to the framework will not be dispatched to the
+     * application layer until a start of exposure timestamp has been received
+     * via a SHUTTER notify() call. It is highly recommended to
+     * dispatch that call as early as possible.
      */
      const camera3_stream_buffer_t *output_buffers;
+
+     /**
+      * >= CAMERA_DEVICE_API_VERSION_3_2:
+      *
+      * The handle for the input stream buffer for this capture. It may not
+      * yet be consumed at the time the HAL calls process_capture_result(); the
+      * framework will wait on the release sync fences provided by the HAL before
+      * reusing the buffer.
+      *
+      * The HAL should handle the sync fences the same way they are done for
+      * output_buffers.
+      *
+      * Only one input buffer is allowed to be sent per request. Similarly to
+      * output buffers, the ordering of returned input buffers must be
+      * maintained by the HAL.
+      *
+      * Performance considerations:
+      *
+      * The input buffer should be returned as early as possible. If the HAL
+      * supports sync fences, it can call process_capture_result to hand it back
+      * with sync fences being set appropriately. If the sync fences are not
+      * supported, the buffer can only be returned when it is consumed, which
+      * may take long time; the HAL may choose to copy this input buffer to make
+      * the buffer return sooner.
+      */
+      const camera3_stream_buffer_t *input_buffer;
+
+     /**
+      * >= CAMERA_DEVICE_API_VERSION_3_2:
+      *
+      * In order to take advantage of partial results, the HAL must set the
+      * static metadata android.request.partialResultCount to the number of
+      * partial results it will send for each frame.
+      *
+      * Each new capture result with a partial result must set
+      * this field (partial_result) to a distinct inclusive value between
+      * 1 and android.request.partialResultCount.
+      *
+      * HALs not wishing to take advantage of this feature must not
+      * set an android.request.partialResultCount or partial_result to a value
+      * other than 1.
+      *
+      * This value must be set to 0 when a capture result contains buffers only
+      * and no metadata.
+      */
+     uint32_t partial_result;
 
 } camera3_capture_result_t;
 
@@ -1768,6 +2118,13 @@ typedef struct camera3_callback_ops {
      * message. In this case, individual ERROR_RESULT/ERROR_BUFFER messages
      * should not be sent.
      *
+     * Performance requirements:
+     *
+     * This is a non-blocking call. The framework will return this call in 5ms.
+     *
+     * The pipeline latency (see S7 for definition) should be less than or equal to
+     * 4 frame intervals, and must be less than or equal to 8 frame intervals.
+     *
      */
     void (*process_capture_result)(const struct camera3_callback_ops *,
             const camera3_capture_result_t *result);
@@ -1781,11 +2138,25 @@ typedef struct camera3_callback_ops {
      * with the HAL, and the msg only needs to be valid for the duration of this
      * call.
      *
+     * Multiple threads may call notify() simultaneously.
+     *
+     * <= CAMERA_DEVICE_API_VERSION_3_1:
+     *
      * The notification for the start of exposure for a given request must be
      * sent by the HAL before the first call to process_capture_result() for
      * that request is made.
      *
-     * Multiple threads may call notify() simultaneously.
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * Buffers delivered to the framework will not be dispatched to the
+     * application layer until a start of exposure timestamp has been received
+     * via a SHUTTER notify() call. It is highly recommended to
+     * dispatch this call as early as possible.
+     *
+     * ------------------------------------------------------------------------
+     * Performance requirements:
+     *
+     * This is a non-blocking call. The framework will return this call in 5ms.
      */
     void (*notify)(const struct camera3_callback_ops *,
             const camera3_notify_msg_t *msg);
@@ -1806,6 +2177,11 @@ typedef struct camera3_device_ops {
      * the HAL. Will be called once after a successful open() call, before any
      * other functions are called on the camera3_device_ops structure.
      *
+     * Performance requirements:
+     *
+     * This should be a non-blocking call. The HAL should return from this call
+     * in 5ms, and must return from this call in 10ms.
+     *
      * Return values:
      *
      *  0:     On successful initialization
@@ -1823,6 +2199,8 @@ typedef struct camera3_device_ops {
     /**
      * configure_streams:
      *
+     * CAMERA_DEVICE_API_VERSION_3_0 only:
+     *
      * Reset the HAL camera device processing pipeline and set up new input and
      * output streams. This call replaces any existing stream configuration with
      * the streams defined in the stream_list. This method will be called at
@@ -1835,16 +2213,19 @@ typedef struct camera3_device_ops {
      * The stream_list may contain streams that are also in the currently-active
      * set of streams (from the previous call to configure_stream()). These
      * streams will already have valid values for usage, max_buffers, and the
-     * private pointer. If such a stream has already had its buffers registered,
+     * private pointer.
+     *
+     * If such a stream has already had its buffers registered,
      * register_stream_buffers() will not be called again for the stream, and
      * buffers from the stream can be immediately included in input requests.
      *
      * If the HAL needs to change the stream configuration for an existing
      * stream due to the new configuration, it may rewrite the values of usage
-     * and/or max_buffers during the configure call. The framework will detect
-     * such a change, and will then reallocate the stream buffers, and call
-     * register_stream_buffers() again before using buffers from that stream in
-     * a request.
+     * and/or max_buffers during the configure call.
+     *
+     * The framework will detect such a change, and will then reallocate the
+     * stream buffers, and call register_stream_buffers() again before using
+     * buffers from that stream in a request.
      *
      * If a currently-active stream is not included in stream_list, the HAL may
      * safely remove any references to that stream. It will not be reused in a
@@ -1873,6 +2254,115 @@ typedef struct camera3_device_ops {
      * of (for example) a preview stream, with allocation for other streams
      * happening later or concurrently.
      *
+     * ------------------------------------------------------------------------
+     * CAMERA_DEVICE_API_VERSION_3_1 only:
+     *
+     * Reset the HAL camera device processing pipeline and set up new input and
+     * output streams. This call replaces any existing stream configuration with
+     * the streams defined in the stream_list. This method will be called at
+     * least once after initialize() before a request is submitted with
+     * process_capture_request().
+     *
+     * The stream_list must contain at least one output-capable stream, and may
+     * not contain more than one input-capable stream.
+     *
+     * The stream_list may contain streams that are also in the currently-active
+     * set of streams (from the previous call to configure_stream()). These
+     * streams will already have valid values for usage, max_buffers, and the
+     * private pointer.
+     *
+     * If such a stream has already had its buffers registered,
+     * register_stream_buffers() will not be called again for the stream, and
+     * buffers from the stream can be immediately included in input requests.
+     *
+     * If the HAL needs to change the stream configuration for an existing
+     * stream due to the new configuration, it may rewrite the values of usage
+     * and/or max_buffers during the configure call.
+     *
+     * The framework will detect such a change, and will then reallocate the
+     * stream buffers, and call register_stream_buffers() again before using
+     * buffers from that stream in a request.
+     *
+     * If a currently-active stream is not included in stream_list, the HAL may
+     * safely remove any references to that stream. It will not be reused in a
+     * later configure() call by the framework, and all the gralloc buffers for
+     * it will be freed after the configure_streams() call returns.
+     *
+     * The stream_list structure is owned by the framework, and may not be
+     * accessed once this call completes. The address of an individual
+     * camera3_stream_t structure will remain valid for access by the HAL until
+     * the end of the first configure_stream() call which no longer includes
+     * that camera3_stream_t in the stream_list argument. The HAL may not change
+     * values in the stream structure outside of the private pointer, except for
+     * the usage and max_buffers members during the configure_streams() call
+     * itself.
+     *
+     * If the stream is new, max_buffer, and private pointer fields of the
+     * stream structure will all be set to 0. The usage will be set to the
+     * consumer usage flags. The HAL device must set these fields before the
+     * configure_streams() call returns. These fields are then used by the
+     * framework and the platform gralloc module to allocate the gralloc
+     * buffers for each stream.
+     *
+     * Before such a new stream can have its buffers included in a capture
+     * request, the framework will call register_stream_buffers() with that
+     * stream. However, the framework is not required to register buffers for
+     * _all_ streams before submitting a request. This allows for quick startup
+     * of (for example) a preview stream, with allocation for other streams
+     * happening later or concurrently.
+     *
+     * ------------------------------------------------------------------------
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * Reset the HAL camera device processing pipeline and set up new input and
+     * output streams. This call replaces any existing stream configuration with
+     * the streams defined in the stream_list. This method will be called at
+     * least once after initialize() before a request is submitted with
+     * process_capture_request().
+     *
+     * The stream_list must contain at least one output-capable stream, and may
+     * not contain more than one input-capable stream.
+     *
+     * The stream_list may contain streams that are also in the currently-active
+     * set of streams (from the previous call to configure_stream()). These
+     * streams will already have valid values for usage, max_buffers, and the
+     * private pointer.
+     *
+     * If the HAL needs to change the stream configuration for an existing
+     * stream due to the new configuration, it may rewrite the values of usage
+     * and/or max_buffers during the configure call.
+     *
+     * The framework will detect such a change, and may then reallocate the
+     * stream buffers before using buffers from that stream in a request.
+     *
+     * If a currently-active stream is not included in stream_list, the HAL may
+     * safely remove any references to that stream. It will not be reused in a
+     * later configure() call by the framework, and all the gralloc buffers for
+     * it will be freed after the configure_streams() call returns.
+     *
+     * The stream_list structure is owned by the framework, and may not be
+     * accessed once this call completes. The address of an individual
+     * camera3_stream_t structure will remain valid for access by the HAL until
+     * the end of the first configure_stream() call which no longer includes
+     * that camera3_stream_t in the stream_list argument. The HAL may not change
+     * values in the stream structure outside of the private pointer, except for
+     * the usage and max_buffers members during the configure_streams() call
+     * itself.
+     *
+     * If the stream is new, max_buffer, and private pointer fields of the
+     * stream structure will all be set to 0. The usage will be set to the
+     * consumer usage flags. The HAL device must set these fields before the
+     * configure_streams() call returns. These fields are then used by the
+     * framework and the platform gralloc module to allocate the gralloc
+     * buffers for each stream.
+     *
+     * Newly allocated buffers may be included in a capture request at any time
+     * by the framework. Once a gralloc buffer is returned to the framework
+     * with process_capture_result (and its respective release_fence has been
+     * signaled) the framework may free or reuse it at any time.
+     *
+     * ------------------------------------------------------------------------
+     *
      * Preconditions:
      *
      * The framework will only call this method when no captures are being
@@ -1888,7 +2378,7 @@ typedef struct camera3_device_ops {
      * frame rate given the sizes and formats of the output streams, as
      * documented in the camera device's static metadata.
      *
-     * Performance expectations:
+     * Performance requirements:
      *
      * This call is expected to be heavyweight and possibly take several hundred
      * milliseconds to complete, since it may require resetting and
@@ -1897,6 +2387,9 @@ typedef struct camera3_device_ops {
      * reconfiguration delay to minimize the user-visible pauses during
      * application operational mode changes (such as switching from still
      * capture to video recording).
+     *
+     * The HAL should return from this call in 500ms, and must return from this
+     * call in 1000ms.
      *
      * Return values:
      *
@@ -1933,6 +2426,12 @@ typedef struct camera3_device_ops {
     /**
      * register_stream_buffers:
      *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * DEPRECATED. This will not be called and must be set to NULL.
+     *
+     * <= CAMERA_DEVICE_API_VERSION_3_1:
+     *
      * Register buffers for a given stream with the HAL device. This method is
      * called by the framework after a new stream is defined by
      * configure_streams, and before buffers from that stream are included in a
@@ -1954,6 +2453,11 @@ typedef struct camera3_device_ops {
      * If the stream format was set to HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
      * the camera HAL should inspect the passed-in buffers here to determine any
      * platform-private pixel format information.
+     *
+     * Performance requirements:
+     *
+     * This should be a non-blocking call. The HAL should return from this call
+     * in 1ms, and must return from this call in 5ms.
      *
      * Return values:
      *
@@ -1991,6 +2495,11 @@ typedef struct camera3_device_ops {
      * HAL may not modify the buffer once it is returned by this call. The same
      * buffer may be returned for subsequent calls for the same template, or for
      * other templates.
+     *
+     * Performance requirements:
+     *
+     * This should be a non-blocking call. The HAL should return from this call
+     * in 1ms, and must return from this call in 5ms.
      *
      * Return values:
      *
@@ -2036,6 +2545,22 @@ typedef struct camera3_device_ops {
      * framework will wait on the sync fence before refilling and reusing the
      * input buffer.
      *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *
+     * The input/output buffers provided by the framework in each request
+     * may be brand new (having never before seen by the HAL).
+     *
+     * ------------------------------------------------------------------------
+     * Performance considerations:
+     *
+     * Handling a new buffer should be extremely lightweight and there should be
+     * no frame rate degradation or frame jitter introduced.
+     *
+     * This call must return fast enough to ensure that the requested frame
+     * rate can be sustained, especially for streaming cases (post-processing
+     * quality settings set to FAST). The HAL should return this call in 1
+     * frame interval, and must return from this call in 4 frame intervals.
+     *
      * Return values:
      *
      *  0:      On a successful start to processing the capture request
@@ -2071,6 +2596,10 @@ typedef struct camera3_device_ops {
      * The definition of vendor_tag_query_ops_t can be found in
      * system/media/camera/include/system/camera_metadata.h.
      *
+     * >= CAMERA_DEVICE_API_VERSION_3_2:
+     *    DEPRECATED. This function has been deprecated and should be set to
+     *    NULL by the HAL.  Please implement get_vendor_tag_ops in camera_common.h
+     *    instead.
      */
     void (*get_metadata_vendor_tag_ops)(const struct camera3_device*,
             vendor_tag_query_ops_t* ops);
@@ -2084,6 +2613,14 @@ typedef struct camera3_device_ops {
      *
      * The passed-in file descriptor can be used to write debugging text using
      * dprintf() or write(). The text should be in ASCII encoding only.
+     *
+     * Performance requirements:
+     *
+     * This must be a non-blocking call. The HAL should return from this call
+     * in 1ms, must return from this call in 10ms. This call must avoid
+     * deadlocks, as it may be called at any point during camera operation.
+     * Any synchronization primitives used (such as mutex locks or semaphores)
+     * should be acquired with a timeout.
      */
     void (*dump)(const struct camera3_device *, int fd);
 
@@ -2095,22 +2632,73 @@ typedef struct camera3_device_ops {
      * quickly as possible in order to prepare for a configure_streams() call.
      *
      * No buffers are required to be successfully returned, so every buffer
-     * held at the time of flush() (whether sucessfully filled or not) may be
+     * held at the time of flush() (whether successfully filled or not) may be
      * returned with CAMERA3_BUFFER_STATUS_ERROR. Note the HAL is still allowed
-     * to return valid (STATUS_OK) buffers during this call, provided they are
-     * succesfully filled.
+     * to return valid (CAMERA3_BUFFER_STATUS_OK) buffers during this call,
+     * provided they are successfully filled.
      *
      * All requests currently in the HAL are expected to be returned as soon as
      * possible.  Not-in-process requests should return errors immediately. Any
      * interruptible hardware blocks should be stopped, and any uninterruptible
      * blocks should be waited on.
      *
+     * More specifically, the HAL must follow below requirements for various cases:
+     *
+     * 1. For captures that are too late for the HAL to cancel/stop, and will be
+     *    completed normally by the HAL; i.e. the HAL can send shutter/notify and
+     *    process_capture_result and buffers as normal.
+     *
+     * 2. For pending requests that have not done any processing, the HAL must call notify
+     *    CAMERA3_MSG_ERROR_REQUEST, and return all the output buffers with
+     *    process_capture_result in the error state (CAMERA3_BUFFER_STATUS_ERROR).
+     *    The HAL must not place the release fence into an error state, instead,
+     *    the release fences must be set to the acquire fences passed by the framework,
+     *    or -1 if they have been waited on by the HAL already. This is also the path
+     *    to follow for any captures for which the HAL already called notify() with
+     *    CAMERA3_MSG_SHUTTER but won't be producing any metadata/valid buffers for.
+     *    After CAMERA3_MSG_ERROR_REQUEST, for a given frame, only process_capture_results with
+     *    buffers in CAMERA3_BUFFER_STATUS_ERROR are allowed. No further notifys or
+     *    process_capture_result with non-null metadata is allowed.
+     *
+     * 3. For partially completed pending requests that will not have all the output
+     *    buffers or perhaps missing metadata, the HAL should follow below:
+     *
+     *    3.1. Call notify with CAMERA3_MSG_ERROR_RESULT if some of the expected result
+     *    metadata (i.e. one or more partial metadata) won't be available for the capture.
+     *
+     *    3.2. Call notify with CAMERA3_MSG_ERROR_BUFFER for every buffer that won't
+     *         be produced for the capture.
+     *
+     *    3.3  Call notify with CAMERA3_MSG_SHUTTER with the capture timestamp before
+     *         any buffers/metadata are returned with process_capture_result.
+     *
+     *    3.4 For captures that will produce some results, the HAL must not call
+     *        CAMERA3_MSG_ERROR_REQUEST, since that indicates complete failure.
+     *
+     *    3.5. Valid buffers/metadata should be passed to the framework as normal.
+     *
+     *    3.6. Failed buffers should be returned to the framework as described for case 2.
+     *         But failed buffers do not have to follow the strict ordering valid buffers do,
+     *         and may be out-of-order with respect to valid buffers. For example, if buffers
+     *         A, B, C, D, E are sent, D and E are failed, then A, E, B, D, C is an acceptable
+     *         return order.
+     *
+     *    3.7. For fully-missing metadata, calling CAMERA3_MSG_ERROR_RESULT is sufficient, no
+     *         need to call process_capture_result with NULL metadata or equivalent.
+     *
      * flush() should only return when there are no more outstanding buffers or
-     * requests left in the HAL.  The framework may call configure_streams (as
+     * requests left in the HAL. The framework may call configure_streams (as
      * the HAL state is now quiesced) or may issue new requests.
      *
-     * A flush() call should only take 100ms or less. The maximum time it can
-     * take is 1 second.
+     * Note that it's sufficient to only support fully-succeeded and fully-failed result cases.
+     * However, it is highly desirable to support the partial failure cases as well, as it
+     * could help improve the flush call overall performance.
+     *
+     * Performance requirements:
+     *
+     * The HAL should return from this call in 100ms, and must return from this
+     * call in 1000ms. And this call must not be blocked longer than pipeline
+     * latency (see S7 for definition).
      *
      * Version information:
      *
@@ -2141,6 +2729,13 @@ typedef struct camera3_device {
     /**
      * common.version must equal CAMERA_DEVICE_API_VERSION_3_0 to identify this
      * device as implementing version 3.0 of the camera device HAL.
+     *
+     * Performance requirements:
+     *
+     * Camera open (common.module->common.methods->open) should return in 200ms, and must return
+     * in 500ms.
+     * Camera close (common.close) should return in 200ms, and must return in 500ms.
+     *
      */
     hw_device_t common;
     camera3_device_ops_t *ops;

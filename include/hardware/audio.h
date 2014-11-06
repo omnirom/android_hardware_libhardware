@@ -203,18 +203,6 @@ __BEGIN_DECLS
 
 /**************************************/
 
-/* common audio stream configuration parameters
- * You should memset() the entire structure to zero before use to
- * ensure forward compatibility
- */
-struct audio_config {
-    uint32_t sample_rate;
-    audio_channel_mask_t channel_mask;
-    audio_format_t  format;
-    audio_offload_info_t offload_info;
-};
-typedef struct audio_config audio_config_t;
-
 #ifdef QCOM_DIRECTTRACK
 /** Structure to save buffer information for applying effects for
  *  LPA buffers */

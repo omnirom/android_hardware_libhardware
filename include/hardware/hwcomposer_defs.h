@@ -127,14 +127,8 @@ enum {
        HWC_DEVICE_API_VERSION_1_4. */
     HWC_CURSOR_OVERLAY =  5,
 
-#ifdef QCOM_HARDWARE
     /* this layer will be handled in the HWC, using a blit engine */
-    /* TODO(xplodwild): Before lollipop merge, value was = 4, but now 4 is used.
-                        As qcom stuff is built from source, it shouldn't hurt to
-                        change this value, but if you have issues, check here. */
     HWC_BLIT = 6,
-#endif
-
  };
 /*
  * hwc_layer_t::blending values

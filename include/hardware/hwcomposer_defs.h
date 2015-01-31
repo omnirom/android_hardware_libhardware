@@ -91,7 +91,12 @@ enum {
      */
     HWC_IS_CURSOR_LAYER = 0x00000002,
 
-    HWC_SCREENSHOT_ANIMATOR_LAYER = 0x00000003,
+    /*
+     * HWC_SCREENSHOT_ANIMATOR_LAYER is set by surfaceflinger to indicate that this
+     * layer is a screenshot animating layer.  HWC uses this info to disable rotation
+     * animation on External Display
+     */
+    HWC_SCREENSHOT_ANIMATOR_LAYER = 0x00000004
 };
 
 /*

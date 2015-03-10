@@ -27,6 +27,7 @@ __BEGIN_DECLS
 
 #define POWER_MODULE_API_VERSION_0_1  HARDWARE_MODULE_API_VERSION(0, 1)
 #define POWER_MODULE_API_VERSION_0_2  HARDWARE_MODULE_API_VERSION(0, 2)
+#define POWER_MODULE_API_VERSION_0_3  HARDWARE_MODULE_API_VERSION(0, 3)
 
 /**
  * The id of this module
@@ -49,6 +50,10 @@ typedef enum {
     POWER_HINT_CPU_BOOST = 0x00000010,
     POWER_HINT_POWER_PROFILE = 0x00000100
 } power_hint_t;
+
+typedef enum {
+    POWER_FEATURE_DOUBLE_TAP_TO_WAKE = 0x00000001
+} feature_t;
 
 /**
  * Every hardware module must have a data structure named HAL_MODULE_INFO_SYM
@@ -129,6 +134,21 @@ typedef struct power_module {
      */
     void (*powerHint)(struct power_module *module, power_hint_t hint,
                       void *data);
+
+    /*
+     * (*setFeature) is called to turn on or off a particular feature
+     * depending on the state parameter. The possible features are:
+     *
+     * FEATURE_DOUBLE_TAP_TO_WAKE
+     *
+     *    Enabling/Disabling this feature will allow/disallow the system
+     *    to wake up by tapping the screen twice.
+     *
+     * availability: version 0.3
+     *
+     */
+    void (*setFeature)(struct power_module *module, feature_t feature, int state);
+
 } power_module_t;
 
 

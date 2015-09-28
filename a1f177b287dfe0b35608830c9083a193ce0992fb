@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "d8f0a54e_4f6cf9ce",
+        "filename": "include/hardware/power.h",
+        "patchSetId": 1
+      },
+      "lineNbr": 53,
+      "author": {
+        "id": 1000026
+      },
+      "writtenOn": "2015-09-28T11:31:42Z",
+      "side": 1,
+      "message": "add in correct order\nand tell me for what we need this?",
+      "revId": "a1f177b287dfe0b35608830c9083a193ce0992fb",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "d8f0a54e_6f77bd9a",
+        "filename": "include/hardware/power.h",
+        "patchSetId": 1
+      },
+      "lineNbr": 54,
+      "author": {
+        "id": 1000026
+      },
+      "writtenOn": "2015-09-28T11:31:42Z",
+      "side": 1,
+      "message": "we dont support CM profiles\nbut have our very own way",
+      "revId": "a1f177b287dfe0b35608830c9083a193ce0992fb",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    }
+  ]
+}

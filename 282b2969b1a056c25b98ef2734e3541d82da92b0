@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "d8f0a54e_0f66f1ec",
+        "filename": "include/hardware/power.h",
+        "patchSetId": 1
+      },
+      "lineNbr": 54,
+      "author": {
+        "id": 1000026
+      },
+      "writtenOn": "2015-09-28T11:32:19Z",
+      "side": 1,
+      "message": "same as for the other CM power hints - for what?",
+      "revId": "282b2969b1a056c25b98ef2734e3541d82da92b0",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    }
+  ]
+}

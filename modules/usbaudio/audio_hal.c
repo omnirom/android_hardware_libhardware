@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "usb_audio_hw"
+#define LOG_TAG "modules.usbaudio.audio_hal"
 /*#define LOG_NDEBUG 0*/
 
 #include <errno.h>
@@ -51,9 +51,14 @@ static const unsigned k_force_channels = 0;
 
 #include "alsa_device_profile.h"
 #include "alsa_device_proxy.h"
-#include "logging.h"
+#include "alsa_logging.h"
 
 #define DEFAULT_INPUT_BUFFER_SIZE_MS 20
+
+// stereo channel count
+#define FCC_2 2
+// fixed channel count of 8 limitation (for data processing in AudioFlinger)
+#define FCC_8 8
 
 struct audio_device {
     struct audio_hw_device hw_device;
@@ -75,11 +80,12 @@ struct stream_out {
     struct audio_stream_out stream;
 
     pthread_mutex_t lock;               /* see note below on mutex acquisition order */
+    pthread_mutex_t pre_lock;           /* acquire before lock to avoid DOS by playback thread */
     bool standby;
 
     struct audio_device *dev;           /* hardware information - only using this for the lock */
 
-    alsa_device_profile * profile;
+    alsa_device_profile * profile;      /* Points to the alsa_device_profile in the audio_device */
     alsa_device_proxy proxy;            /* state of the stream */
 
     unsigned hal_channel_count;         /* channel count exposed to AudioFlinger.
@@ -87,6 +93,8 @@ struct stream_out {
                                          * the device is not compatible with AudioFlinger
                                          * capabilities, e.g. exposes too many channels or
                                          * too few channels. */
+    audio_channel_mask_t hal_channel_mask;   /* channel mask exposed to AudioFlinger. */
+
     void * conversion_buffer;           /* any conversions are put into here
                                          * they could come from here too if
                                          * there was a previous conversion */
@@ -96,12 +104,13 @@ struct stream_out {
 struct stream_in {
     struct audio_stream_in stream;
 
-    pthread_mutex_t lock; /* see note below on mutex acquisition order */
+    pthread_mutex_t lock;               /* see note below on mutex acquisition order */
+    pthread_mutex_t pre_lock;           /* acquire before lock to avoid DOS by capture thread */
     bool standby;
 
     struct audio_device *dev;           /* hardware information - only using this for the lock */
 
-    alsa_device_profile * profile;
+    alsa_device_profile * profile;      /* Points to the alsa_device_profile in the audio_device */
     alsa_device_proxy proxy;            /* state of the stream */
 
     unsigned hal_channel_count;         /* channel count exposed to AudioFlinger.
@@ -109,6 +118,8 @@ struct stream_in {
                                          * the device is not compatible with AudioFlinger
                                          * capabilities, e.g. exposes too many channels or
                                          * too few channels. */
+    audio_channel_mask_t hal_channel_mask;   /* channel mask exposed to AudioFlinger. */
+
     /* We may need to read more data from the device in order to data reduce to 16bit, 4chan */
     void * conversion_buffer;           /* any conversions are put into here
                                          * they could come from here too if
@@ -117,77 +128,49 @@ struct stream_in {
 };
 
 /*
- * Data Conversions
+ * NOTE: when multiple mutexes have to be acquired, always take the
+ * stream_in or stream_out mutex first, followed by the audio_device mutex.
+ * stream pre_lock is always acquired before stream lock to prevent starvation of control thread by
+ * higher priority playback or capture thread.
  */
-/*
- * Convert a buffer of packed (3-byte) PCM24LE samples to PCM16LE samples.
- *   in_buff points to the buffer of PCM24LE samples
- *   num_in_samples size of input buffer in SAMPLES
- *   out_buff points to the buffer to receive converted PCM16LE LE samples.
- * returns
- *   the number of BYTES of output data.
- * We are doing this since we *always* present to The Framework as A PCM16LE device, but need to
- * support PCM24_3LE (24-bit, packed).
- * NOTE:
- *   This conversion is safe to do in-place (in_buff == out_buff).
- * TODO Move this to a utilities module.
- */
-static size_t convert_24_3_to_16(const unsigned char * in_buff, size_t num_in_samples,
-                                 short * out_buff)
-{
-    /*
-     * Move from front to back so that the conversion can be done in-place
-     * i.e. in_buff == out_buff
-     */
-    /* we need 2 bytes in the output for every 3 bytes in the input */
-    unsigned char* dst_ptr = (unsigned char*)out_buff;
-    const unsigned char* src_ptr = in_buff;
-    size_t src_smpl_index;
-    for (src_smpl_index = 0; src_smpl_index < num_in_samples; src_smpl_index++) {
-        src_ptr++;               /* lowest-(skip)-byte */
-        *dst_ptr++ = *src_ptr++; /* low-byte */
-        *dst_ptr++ = *src_ptr++; /* high-byte */
-    }
-
-    /* return number of *bytes* generated: */
-    return num_in_samples * 2;
-}
 
 /*
- * Convert a buffer of packed (3-byte) PCM32 samples to PCM16LE samples.
- *   in_buff points to the buffer of PCM32 samples
- *   num_in_samples size of input buffer in SAMPLES
- *   out_buff points to the buffer to receive converted PCM16LE LE samples.
- * returns
- *   the number of BYTES of output data.
- * We are doing this since we *always* present to The Framework as A PCM16LE device, but need to
- * support PCM_FORMAT_S32_LE (32-bit).
- * NOTE:
- *   This conversion is safe to do in-place (in_buff == out_buff).
- * TODO Move this to a utilities module.
+ * Extract the card and device numbers from the supplied key/value pairs.
+ *   kvpairs    A null-terminated string containing the key/value pairs or card and device.
+ *              i.e. "card=1;device=42"
+ *   card   A pointer to a variable to receive the parsed-out card number.
+ *   device A pointer to a variable to receive the parsed-out device number.
+ * NOTE: The variables pointed to by card and device return -1 (undefined) if the
+ *  associated key/value pair is not found in the provided string.
+ *  Return true if the kvpairs string contain a card/device spec, false otherwise.
  */
-static size_t convert_32_to_16(const int32_t * in_buff, size_t num_in_samples, short * out_buff)
+static bool parse_card_device_params(const char *kvpairs, int *card, int *device)
 {
-    /*
-     * Move from front to back so that the conversion can be done in-place
-     * i.e. in_buff == out_buff
-     */
+    struct str_parms * parms = str_parms_create_str(kvpairs);
+    char value[32];
+    int param_val;
 
-    short * dst_ptr = out_buff;
-    const int32_t* src_ptr = in_buff;
-    size_t src_smpl_index;
-    for (src_smpl_index = 0; src_smpl_index < num_in_samples; src_smpl_index++) {
-        *dst_ptr++ = *src_ptr++ >> 16;
+    // initialize to "undefined" state.
+    *card = -1;
+    *device = -1;
+
+    param_val = str_parms_get_str(parms, "card", value, sizeof(value));
+    if (param_val >= 0) {
+        *card = atoi(value);
     }
 
-    /* return number of *bytes* generated: */
-    return num_in_samples * 2;
+    param_val = str_parms_get_str(parms, "device", value, sizeof(value));
+    if (param_val >= 0) {
+        *device = atoi(value);
+    }
+
+    str_parms_destroy(parms);
+
+    return *card >= 0 && *device >= 0;
 }
 
 static char * device_get_parameters(alsa_device_profile * profile, const char * keys)
 {
-    ALOGV("usb:audio_hw::device_get_parameters() keys:%s", keys);
-
     if (profile->card < 0 || profile->device < 0) {
         return strdup("");
     }
@@ -224,9 +207,23 @@ static char * device_get_parameters(alsa_device_profile * profile, const char * 
     char* result_str = str_parms_to_str(result);
     str_parms_destroy(result);
 
-    ALOGV("usb:audio_hw::device_get_parameters = %s", result_str);
+    ALOGV("device_get_parameters = %s", result_str);
 
     return result_str;
+}
+
+void lock_input_stream(struct stream_in *in)
+{
+    pthread_mutex_lock(&in->pre_lock);
+    pthread_mutex_lock(&in->lock);
+    pthread_mutex_unlock(&in->pre_lock);
+}
+
+void lock_output_stream(struct stream_out *out)
+{
+    pthread_mutex_lock(&out->pre_lock);
+    pthread_mutex_lock(&out->lock);
+    pthread_mutex_unlock(&out->pre_lock);
 }
 
 /*
@@ -263,7 +260,7 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
 static uint32_t out_get_channels(const struct audio_stream *stream)
 {
     const struct stream_out *out = (const struct stream_out*)stream;
-    return audio_channel_out_mask_from_count(out->hal_channel_count);
+    return out->hal_channel_mask;
 }
 
 static audio_format_t out_get_format(const struct audio_stream *stream)
@@ -286,16 +283,14 @@ static int out_standby(struct audio_stream *stream)
 {
     struct stream_out *out = (struct stream_out *)stream;
 
-    pthread_mutex_lock(&out->dev->lock);
-    pthread_mutex_lock(&out->lock);
-
+    lock_output_stream(out);
     if (!out->standby) {
+        pthread_mutex_lock(&out->dev->lock);
         proxy_close(&out->proxy);
+        pthread_mutex_unlock(&out->dev->lock);
         out->standby = true;
     }
-
     pthread_mutex_unlock(&out->lock);
-    pthread_mutex_unlock(&out->dev->lock);
 
     return 0;
 }
@@ -307,30 +302,25 @@ static int out_dump(const struct audio_stream *stream, int fd)
 
 static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 {
-    ALOGV("usb:audio_hw::out out_set_parameters() keys:%s", kvpairs);
+    ALOGV("out_set_parameters() keys:%s", kvpairs);
 
     struct stream_out *out = (struct stream_out *)stream;
 
-    char value[32];
-    int param_val;
     int routing = 0;
     int ret_value = 0;
     int card = -1;
     int device = -1;
 
-    struct str_parms * parms = str_parms_create_str(kvpairs);
+    if (!parse_card_device_params(kvpairs, &card, &device)) {
+        // nothing to do
+        return ret_value;
+    }
+
+    lock_output_stream(out);
+    /* Lock the device because that is where the profile lives */
     pthread_mutex_lock(&out->dev->lock);
-    pthread_mutex_lock(&out->lock);
 
-    param_val = str_parms_get_str(parms, "card", value, sizeof(value));
-    if (param_val >= 0)
-        card = atoi(value);
-
-    param_val = str_parms_get_str(parms, "device", value, sizeof(value));
-    if (param_val >= 0)
-        device = atoi(value);
-
-    if (card >= 0 && device >= 0 && !profile_is_cached_for(out->profile, card, device)) {
+    if (!profile_is_cached_for(out->profile, card, device)) {
         /* cannot read pcm device info if playback is active */
         if (!out->standby)
             ret_value = -ENOSYS;
@@ -347,9 +337,8 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         }
     }
 
-    pthread_mutex_unlock(&out->lock);
     pthread_mutex_unlock(&out->dev->lock);
-    str_parms_destroy(parms);
+    pthread_mutex_unlock(&out->lock);
 
     return ret_value;
 }
@@ -357,8 +346,8 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 static char * out_get_parameters(const struct audio_stream *stream, const char *keys)
 {
     struct stream_out *out = (struct stream_out *)stream;
+    lock_output_stream(out);
     pthread_mutex_lock(&out->dev->lock);
-    pthread_mutex_lock(&out->lock);
 
     char * params_str =  device_get_parameters(out->profile, keys);
 
@@ -382,8 +371,7 @@ static int out_set_volume(struct audio_stream_out *stream, float left, float rig
 /* must be called with hw device and output stream mutexes locked */
 static int start_output_stream(struct stream_out *out)
 {
-    ALOGV("usb:audio_hw::out start_output_stream(card:%d device:%d)",
-          out->profile->card, out->profile->device);
+    ALOGV("start_output_stream(card:%d device:%d)", out->profile->card, out->profile->device);
 
     return proxy_open(&out->proxy);
 }
@@ -393,17 +381,16 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer, si
     int ret;
     struct stream_out *out = (struct stream_out *)stream;
 
-    pthread_mutex_lock(&out->dev->lock);
-    pthread_mutex_lock(&out->lock);
+    lock_output_stream(out);
     if (out->standby) {
+        pthread_mutex_lock(&out->dev->lock);
         ret = start_output_stream(out);
+        pthread_mutex_unlock(&out->dev->lock);
         if (ret != 0) {
-            pthread_mutex_unlock(&out->dev->lock);
             goto err;
         }
         out->standby = false;
     }
-    pthread_mutex_unlock(&out->dev->lock);
 
     alsa_device_proxy* proxy = &out->proxy;
     const void * write_buff = buffer;
@@ -455,8 +442,16 @@ static int out_get_render_position(const struct audio_stream_out *stream, uint32
 static int out_get_presentation_position(const struct audio_stream_out *stream,
                                          uint64_t *frames, struct timespec *timestamp)
 {
-    /* FIXME - This needs to be implemented */
-    return -EINVAL;
+    struct stream_out *out = (struct stream_out *)stream; // discard const qualifier
+    lock_output_stream(out);
+
+    const alsa_device_proxy *proxy = &out->proxy;
+    const int ret = proxy_get_presentation_position(proxy, frames, timestamp);
+
+    pthread_mutex_unlock(&out->lock);
+    ALOGV("out_get_presentation_position() status:%d  frames:%llu",
+            ret, (unsigned long long)*frames);
+    return ret;
 }
 
 static int out_add_audio_effect(const struct audio_stream *stream, effect_handle_t effect)
@@ -480,10 +475,10 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
                                    audio_output_flags_t flags,
                                    struct audio_config *config,
                                    struct audio_stream_out **stream_out,
-                                   const char *address __unused)
+                                   const char *address /*__unused*/)
 {
-    ALOGV("usb:audio_hw::out adev_open_output_stream() handle:0x%X, device:0x%X, flags:0x%X",
-          handle, devices, flags);
+    ALOGV("adev_open_output_stream() handle:0x%X, device:0x%X, flags:0x%X, addr:%s",
+          handle, devices, flags, address);
 
     struct audio_device *adev = (struct audio_device *)dev;
 
@@ -513,13 +508,23 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->stream.get_presentation_position = out_get_presentation_position;
     out->stream.get_next_write_timestamp = out_get_next_write_timestamp;
 
-    out->dev = adev;
+    pthread_mutex_init(&out->lock, (const pthread_mutexattr_t *) NULL);
+    pthread_mutex_init(&out->pre_lock, (const pthread_mutexattr_t *) NULL);
 
+    out->dev = adev;
+    pthread_mutex_lock(&adev->lock);
     out->profile = &adev->out_profile;
 
     // build this to hand to the alsa_device_proxy
     struct pcm_config proxy_config;
     memset(&proxy_config, 0, sizeof(proxy_config));
+
+    /* Pull out the card/device pair */
+    parse_card_device_params(address, &(out->profile->card), &(out->profile->device));
+
+    profile_read_device_info(out->profile);
+
+    pthread_mutex_unlock(&adev->lock);
 
     int ret = 0;
 
@@ -549,15 +554,28 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     }
 
     /* Channels */
-    unsigned proposed_channel_count = profile_get_default_channel_count(out->profile);
+    unsigned proposed_channel_count = 0;
     if (k_force_channels) {
         proposed_channel_count = k_force_channels;
-    } else if (config->channel_mask != AUDIO_CHANNEL_NONE) {
-        proposed_channel_count = audio_channel_count_from_out_mask(config->channel_mask);
+    } else if (config->channel_mask == AUDIO_CHANNEL_NONE) {
+        proposed_channel_count =  profile_get_default_channel_count(out->profile);
     }
-    /* we can expose any channel count mask, and emulate internally. */
-    config->channel_mask = audio_channel_out_mask_from_count(proposed_channel_count);
-    out->hal_channel_count = proposed_channel_count;
+    if (proposed_channel_count != 0) {
+        if (proposed_channel_count <= FCC_2) {
+            // use channel position mask for mono and stereo
+            config->channel_mask = audio_channel_out_mask_from_count(proposed_channel_count);
+        } else {
+            // use channel index mask for multichannel
+            config->channel_mask =
+                    audio_channel_mask_for_index_assignment_from_count(proposed_channel_count);
+        }
+        out->hal_channel_count = proposed_channel_count;
+    } else {
+        out->hal_channel_count = audio_channel_count_from_out_mask(config->channel_mask);
+    }
+    /* we can expose any channel mask, and emulate internally based on channel count. */
+    out->hal_channel_mask = config->channel_mask;
+
     /* no validity checks are needed as proxy_prepare() forces channel_count to be valid.
      * and we emulate any channel count discrepancies in out_write(). */
     proxy_config.channels = proposed_channel_count;
@@ -585,8 +603,8 @@ err_open:
 static void adev_close_output_stream(struct audio_hw_device *dev,
                                      struct audio_stream_out *stream)
 {
-    ALOGV("usb:audio_hw::out adev_close_output_stream()");
     struct stream_out *out = (struct stream_out *)stream;
+    ALOGV("adev_close_output_stream(c:%d d:%d)", out->profile->card, out->profile->device);
 
     /* Close the pcm device */
     out_standby(&stream->common);
@@ -631,21 +649,14 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
 static uint32_t in_get_channels(const struct audio_stream *stream)
 {
     const struct stream_in *in = (const struct stream_in*)stream;
-    return audio_channel_in_mask_from_count(in->hal_channel_count);
+    return in->hal_channel_mask;
 }
 
 static audio_format_t in_get_format(const struct audio_stream *stream)
 {
-    /* TODO Here is the code we need when we support arbitrary input formats
-     * alsa_device_proxy * proxy = ((struct stream_in*)stream)->proxy;
-     * audio_format_t format = audio_format_from_pcm_format(proxy_get_format(proxy));
-     * ALOGV("in_get_format() = %d", format);
-     * return format;
-     */
-    /* Input only supports PCM16 */
-    /* TODO When AudioPolicyManager & AudioFlinger supports arbitrary input formats
-       rewrite this to return the ACTUAL channel format (above) */
-    return AUDIO_FORMAT_PCM_16_BIT;
+     alsa_device_proxy *proxy = &((struct stream_in*)stream)->proxy;
+     audio_format_t format = audio_format_from_pcm_format(proxy_get_format(proxy));
+     return format;
 }
 
 static int in_set_format(struct audio_stream *stream, audio_format_t format)
@@ -659,16 +670,15 @@ static int in_standby(struct audio_stream *stream)
 {
     struct stream_in *in = (struct stream_in *)stream;
 
-    pthread_mutex_lock(&in->dev->lock);
-    pthread_mutex_lock(&in->lock);
-
+    lock_input_stream(in);
     if (!in->standby) {
+        pthread_mutex_lock(&in->dev->lock);
         proxy_close(&in->proxy);
+        pthread_mutex_unlock(&in->dev->lock);
         in->standby = true;
     }
 
     pthread_mutex_unlock(&in->lock);
-    pthread_mutex_unlock(&in->dev->lock);
 
     return 0;
 }
@@ -680,7 +690,7 @@ static int in_dump(const struct audio_stream *stream, int fd)
 
 static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
 {
-    ALOGV("usb: audio_hw::in in_set_parameters() keys:%s", kvpairs);
+    ALOGV("in_set_parameters() keys:%s", kvpairs);
 
     struct stream_in *in = (struct stream_in *)stream;
 
@@ -691,19 +701,13 @@ static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
     int card = -1;
     int device = -1;
 
-    struct str_parms * parms = str_parms_create_str(kvpairs);
+    if (!parse_card_device_params(kvpairs, &card, &device)) {
+        // nothing to do
+        return ret_value;
+    }
 
+    lock_input_stream(in);
     pthread_mutex_lock(&in->dev->lock);
-    pthread_mutex_lock(&in->lock);
-
-    /* Device Connection Message ("card=1,device=0") */
-    param_val = str_parms_get_str(parms, "card", value, sizeof(value));
-    if (param_val >= 0)
-        card = atoi(value);
-
-    param_val = str_parms_get_str(parms, "device", value, sizeof(value));
-    if (param_val >= 0)
-        device = atoi(value);
 
     if (card >= 0 && device >= 0 && !profile_is_cached_for(in->profile, card, device)) {
         /* cannot read pcm device info if playback is active */
@@ -722,10 +726,8 @@ static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
         }
     }
 
-    pthread_mutex_unlock(&in->lock);
     pthread_mutex_unlock(&in->dev->lock);
-
-    str_parms_destroy(parms);
+    pthread_mutex_unlock(&in->lock);
 
     return ret_value;
 }
@@ -734,13 +736,13 @@ static char * in_get_parameters(const struct audio_stream *stream, const char *k
 {
     struct stream_in *in = (struct stream_in *)stream;
 
+    lock_input_stream(in);
     pthread_mutex_lock(&in->dev->lock);
-    pthread_mutex_lock(&in->lock);
 
     char * params_str =  device_get_parameters(in->profile, keys);
 
-    pthread_mutex_unlock(&in->lock);
     pthread_mutex_unlock(&in->dev->lock);
+    pthread_mutex_unlock(&in->lock);
 
     return params_str;
 }
@@ -763,8 +765,7 @@ static int in_set_gain(struct audio_stream_in *stream, float gain)
 /* must be called with hw device and output stream mutexes locked */
 static int start_input_stream(struct stream_in *in)
 {
-    ALOGV("usb:audio_hw::start_input_stream(card:%d device:%d)",
-          in->profile->card, in->profile->device);
+    ALOGV("ustart_input_stream(card:%d device:%d)", in->profile->card, in->profile->device);
 
     return proxy_open(&in->proxy);
 }
@@ -779,17 +780,16 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer, size_t byte
 
     struct stream_in * in = (struct stream_in *)stream;
 
-    pthread_mutex_lock(&in->dev->lock);
-    pthread_mutex_lock(&in->lock);
+    lock_input_stream(in);
     if (in->standby) {
-        if (start_input_stream(in) != 0) {
-            pthread_mutex_unlock(&in->dev->lock);
+        pthread_mutex_lock(&in->dev->lock);
+        ret = start_input_stream(in);
+        pthread_mutex_unlock(&in->dev->lock);
+        if (ret != 0) {
             goto err;
         }
         in->standby = false;
     }
-    pthread_mutex_unlock(&in->dev->lock);
-
 
     alsa_device_profile * profile = in->profile;
 
@@ -798,20 +798,11 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer, size_t byte
      * number of bytes in the HAL format (16-bit, stereo).
      */
     num_read_buff_bytes = bytes;
-    int num_device_channels = proxy_get_channel_count(&in->proxy);
-    int num_req_channels = in->hal_channel_count;
+    int num_device_channels = proxy_get_channel_count(&in->proxy); /* what we told Alsa */
+    int num_req_channels = in->hal_channel_count; /* what we told AudioFlinger */
 
     if (num_device_channels != num_req_channels) {
         num_read_buff_bytes = (num_device_channels * num_read_buff_bytes) / num_req_channels;
-    }
-
-    enum pcm_format format = proxy_get_format(&in->proxy);
-    if (format == PCM_FORMAT_S24_3LE) {
-        /* 24-bit USB device */
-        num_read_buff_bytes = (3 * num_read_buff_bytes) / 2;
-    } else if (format == PCM_FORMAT_S32_LE) {
-        /* 32-bit USB device */
-        num_read_buff_bytes = num_read_buff_bytes * 2;
     }
 
     /* Setup/Realloc the conversion buffer (if necessary). */
@@ -827,27 +818,6 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer, size_t byte
 
     ret = proxy_read(&in->proxy, read_buff, num_read_buff_bytes);
     if (ret == 0) {
-        /*
-         * Do any conversions necessary to send the data in the format specified to/by the HAL
-         * (but different from the ALSA format), such as 24bit ->16bit, or 4chan -> 2chan.
-         */
-        if (format != PCM_FORMAT_S16_LE) {
-            /* we need to convert */
-            if (num_device_channels != num_req_channels) {
-                out_buff = read_buff;
-            }
-
-            if (format == PCM_FORMAT_S24_3LE) {
-                num_read_buff_bytes =
-                    convert_24_3_to_16(read_buff, num_read_buff_bytes / 3, out_buff);
-            } else if (format == PCM_FORMAT_S32_LE) {
-                num_read_buff_bytes =
-                    convert_32_to_16(read_buff, num_read_buff_bytes / 4, out_buff);
-            } else {
-                goto err;
-            }
-        }
-
         if (num_device_channels != num_req_channels) {
             // ALOGV("chans dev:%d req:%d", num_device_channels, num_req_channels);
 
@@ -867,8 +837,8 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer, size_t byte
         /* no need to acquire in->dev->lock to read mic_muted here as we don't change its state */
         if (num_read_buff_bytes > 0 && in->dev->mic_muted)
             memset(buffer, 0, num_read_buff_bytes);
-    } else if (ret == -ENODEV) {
-            num_read_buff_bytes = 0; //reset the  value after USB headset is unplugged
+    } else {
+        num_read_buff_bytes = 0; // reset the value after USB headset is unplugged
     }
 
 err:
@@ -888,10 +858,10 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
                                   struct audio_config *config,
                                   struct audio_stream_in **stream_in,
                                   audio_input_flags_t flags __unused,
-                                  const char *address __unused,
+                                  const char *address /*__unused*/,
                                   audio_source_t source __unused)
 {
-    ALOGV("usb: in adev_open_input_stream() rate:%" PRIu32 ", chanMask:0x%" PRIX32 ", fmt:%" PRIu8,
+    ALOGV("in adev_open_input_stream() rate:%" PRIu32 ", chanMask:0x%" PRIX32 ", fmt:%" PRIu8,
           config->sample_rate, config->channel_mask, config->format);
 
     struct stream_in *in = (struct stream_in *)calloc(1, sizeof(struct stream_in));
@@ -918,12 +888,22 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
     in->stream.read = in_read;
     in->stream.get_input_frames_lost = in_get_input_frames_lost;
 
+    pthread_mutex_init(&in->lock, (const pthread_mutexattr_t *) NULL);
+    pthread_mutex_init(&in->pre_lock, (const pthread_mutexattr_t *) NULL);
+
     in->dev = (struct audio_device *)dev;
+    pthread_mutex_lock(&in->dev->lock);
 
     in->profile = &in->dev->in_profile;
 
     struct pcm_config proxy_config;
     memset(&proxy_config, 0, sizeof(proxy_config));
+
+    /* Pull out the card/device pair */
+    parse_card_device_params(address, &(in->profile->card), &(in->profile->device));
+
+    profile_read_device_info(in->profile);
+    pthread_mutex_unlock(&in->dev->lock);
 
     /* Rate */
     if (config->sample_rate == 0) {
@@ -936,35 +916,39 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
     }
 
     /* Format */
-    /* until the framework supports format conversion, just take what it asks for
-     * i.e. AUDIO_FORMAT_PCM_16_BIT */
     if (config->format == AUDIO_FORMAT_DEFAULT) {
-        /* just return AUDIO_FORMAT_PCM_16_BIT until the framework supports other input
-         * formats */
-        config->format = AUDIO_FORMAT_PCM_16_BIT;
-        proxy_config.format = PCM_FORMAT_S16_LE;
-    } else if (config->format == AUDIO_FORMAT_PCM_16_BIT) {
-        /* Always accept AUDIO_FORMAT_PCM_16_BIT until the framework supports other input
-         * formats */
-        proxy_config.format = PCM_FORMAT_S16_LE;
+        proxy_config.format = profile_get_default_format(in->profile);
+        config->format = audio_format_from_pcm_format(proxy_config.format);
     } else {
-        /* When the framework support other formats, validate here */
-        config->format = AUDIO_FORMAT_PCM_16_BIT;
-        proxy_config.format = PCM_FORMAT_S16_LE;
-        ret = -EINVAL;
+        enum pcm_format fmt = pcm_format_from_audio_format(config->format);
+        if (profile_is_format_valid(in->profile, fmt)) {
+            proxy_config.format = fmt;
+        } else {
+            proxy_config.format = profile_get_default_format(in->profile);
+            config->format = audio_format_from_pcm_format(proxy_config.format);
+            ret = -EINVAL;
+        }
     }
 
     /* Channels */
-    unsigned proposed_channel_count = profile_get_default_channel_count(in->profile);
+    unsigned proposed_channel_count = 0;
     if (k_force_channels) {
         proposed_channel_count = k_force_channels;
-    } else if (config->channel_mask != AUDIO_CHANNEL_NONE) {
-        proposed_channel_count = audio_channel_count_from_in_mask(config->channel_mask);
+    } else if (config->channel_mask == AUDIO_CHANNEL_NONE) {
+        proposed_channel_count = profile_get_default_channel_count(in->profile);
     }
+    if (proposed_channel_count != 0) {
+        config->channel_mask = audio_channel_in_mask_from_count(proposed_channel_count);
+        if (config->channel_mask == AUDIO_CHANNEL_INVALID)
+            config->channel_mask =
+                    audio_channel_mask_for_index_assignment_from_count(proposed_channel_count);
+        in->hal_channel_count = proposed_channel_count;
+    } else {
+        in->hal_channel_count = audio_channel_count_from_in_mask(config->channel_mask);
+    }
+    /* we can expose any channel mask, and emulate internally based on channel count. */
+    in->hal_channel_mask = config->channel_mask;
 
-    /* we can expose any channel count mask, and emulate internally. */
-    config->channel_mask = audio_channel_in_mask_from_count(proposed_channel_count);
-    in->hal_channel_count = proposed_channel_count;
     proxy_config.channels = profile_get_default_channel_count(in->profile);
     proxy_prepare(&in->proxy, in->profile, &proxy_config);
 
@@ -995,43 +979,6 @@ static void adev_close_input_stream(struct audio_hw_device *dev, struct audio_st
  */
 static int adev_set_parameters(struct audio_hw_device *dev, const char *kvpairs)
 {
-    ALOGV("audio_hw:usb adev_set_parameters(%s)", kvpairs);
-
-    struct audio_device * adev = (struct audio_device *)dev;
-
-    char value[32];
-    int param_val;
-
-    struct str_parms * parms = str_parms_create_str(kvpairs);
-
-    /* Check for the "disconnect" message */
-    param_val = str_parms_get_str(parms, "disconnect", value, sizeof(value));
-    if (param_val >= 0) {
-        audio_devices_t device = (audio_devices_t)atoi(value);
-
-        param_val = str_parms_get_str(parms, "card", value, sizeof(value));
-        int alsa_card = param_val >= 0 ? atoi(value) : -1;
-
-        param_val = str_parms_get_str(parms, "device", value, sizeof(value));
-        int alsa_device = param_val >= 0 ? atoi(value) : -1;
-
-        if (alsa_card >= 0 && alsa_device >= 0) {
-            /* "decache" the profile */
-            pthread_mutex_lock(&adev->lock);
-            if (device == AUDIO_DEVICE_OUT_USB_DEVICE &&
-                profile_is_cached_for(&adev->out_profile, alsa_card, alsa_device)) {
-                profile_decache(&adev->out_profile);
-            }
-            if (device == AUDIO_DEVICE_IN_USB_DEVICE &&
-                profile_is_cached_for(&adev->in_profile, alsa_card, alsa_device)) {
-                profile_decache(&adev->in_profile);
-            }
-            pthread_mutex_unlock(&adev->lock);
-        }
-    }
-
-    str_parms_destroy(parms);
-
     return 0;
 }
 

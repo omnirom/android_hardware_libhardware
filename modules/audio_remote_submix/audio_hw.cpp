@@ -89,7 +89,7 @@ namespace android {
 #define ENABLE_RESAMPLING            1
 #if LOG_STREAMS_TO_FILES
 // Folder to save stream log files to.
-#define LOG_STREAM_FOLDER "/data/misc/media"
+#define LOG_STREAM_FOLDER "/data/misc/audioserver"
 // Log filenames for input and output streams.
 #define LOG_STREAM_OUT_FILENAME LOG_STREAM_FOLDER "/r_submix_out.raw"
 #define LOG_STREAM_IN_FILENAME LOG_STREAM_FOLDER "/r_submix_in.raw"
@@ -823,7 +823,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                 const size_t flush_size = min(frames_to_flush_from_source, flushBufferSizeFrames);
                 frames_to_flush_from_source -= flush_size;
                 // read does not block
-                source->read(flush_buffer, flush_size, AudioBufferProvider::kInvalidPTS);
+                source->read(flush_buffer, flush_size);
             }
         }
     }
@@ -1192,7 +1192,7 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
 
             SUBMIX_ALOGV("in_read(): frames available to read %zd", source->availableToRead());
 
-            frames_read = source->read(buff, read_frames, AudioBufferProvider::kInvalidPTS);
+            frames_read = source->read(buff, read_frames);
 
             SUBMIX_ALOGV("in_read(): frames read %zd", frames_read);
 
@@ -1573,7 +1573,7 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
 
     status_t res = submix_get_route_idx_for_address_l(rsxadev, address, &route_idx);
     if (res != OK) {
-        ALOGE("Error %d looking for address=%s in adev_open_output_stream", res, address);
+        ALOGE("Error %d looking for address=%s in adev_open_input_stream", res, address);
         pthread_mutex_unlock(&rsxadev->lock);
         return res;
     }

@@ -159,7 +159,7 @@ typedef uint32_t GpsAidingData;
 #define BDS_DELETE_EPHEMERIS                     0X02000000
 #define BDS_DELETE_ALMANAC                       0X04000000
 
-#define GPS_DELETE_ALL                           0xFFFFFFFF
+#define GPS_DELETE_ALL                           0x0FFFFFFF
 
 /** AGPS type */
 typedef uint16_t AGpsType;

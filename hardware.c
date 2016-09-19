@@ -117,7 +117,7 @@ static int load(const char *id,
             handle = NULL;
         }
     } else {
-        ALOGV("loaded HAL id=%s path=%s hmi=%p handle=%p",
+        ALOGI("loaded HAL id=%s path=%s hmi=%p handle=%p",
                 id, path, *pHmi, handle);
     }
 

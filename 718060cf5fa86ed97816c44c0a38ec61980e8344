@@ -16,6 +16,24 @@
       "revId": "718060cf5fa86ed97816c44c0a38ec61980e8344",
       "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "78209991_ad84a864",
+        "filename": "include/hardware/hwcomposer.h",
+        "patchSetId": 2
+      },
+      "lineNbr": 302,
+      "author": {
+        "id": 1000026
+      },
+      "writtenOn": "2017-01-11T21:41:10Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "78209991_0daefce4",
+      "revId": "718060cf5fa86ed97816c44c0a38ec61980e8344",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
     }
   ]
 }

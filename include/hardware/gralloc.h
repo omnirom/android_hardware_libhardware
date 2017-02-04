@@ -158,6 +158,14 @@ enum {
 #endif
 };
 
+#ifdef QCOM_BSP
+enum {
+    /* Gralloc perform enums */
+    GRALLOC_MODULE_PERFORM_UPDATE_BUFFER_GEOMETRY = 0,
+    GRALLOC_MODULE_PERFORM_PRIVATE_START
+};
+#endif
+
 /*****************************************************************************/
 
 /**
@@ -167,7 +175,7 @@ enum {
  */
 typedef struct gralloc_module_t {
     struct hw_module_t common;
-    
+
     /*
      * (*registerBuffer)() must be called before a buffer_handle_t that has not
      * been created with (*alloc_device_t::alloc)() can be used.
@@ -343,11 +351,26 @@ typedef struct gralloc_module_t {
 typedef struct alloc_device_t {
     struct hw_device_t common;
 
-    /* 
+#ifdef QCOM_BSP
+    /*
+     * (*allocSize)() Allocates a buffer in graphic memory with the requested
+     * bufferSize parameter and returns a buffer_handle_t and the stride in
+     * pixels to allow the implementation to satisfy hardware constraints on
+     * the width of a pixmap (eg: it may have to be multiple of 8 pixels).
+     * The CALLER TAKES OWNERSHIP of the buffer_handle_t.
+     *
+     * Returns 0 on success or -errno on error.
+     */
+     int (*allocSize)(struct alloc_device_t* dev,
+             int w, int h, int format, int usage,
+             buffer_handle_t* handle, int* stride, int bufferSize);
+#endif
+
+    /*
      * (*alloc)() Allocates a buffer in graphic memory with the requested
      * parameters and returns a buffer_handle_t and the stride in pixels to
      * allow the implementation to satisfy hardware constraints on the width
-     * of a pixmap (eg: it may have to be multiple of 8 pixels). 
+     * of a pixmap (eg: it may have to be multiple of 8 pixels).
      * The CALLER TAKES OWNERSHIP of the buffer_handle_t.
      *
      * If format is HAL_PIXEL_FORMAT_YCbCr_420_888, the returned stride must be

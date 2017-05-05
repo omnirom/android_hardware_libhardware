@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "9828ed82_42f6148c",
+        "filename": "include/hardware/gralloc.h",
+        "patchSetId": 2
+      },
+      "lineNbr": 161,
+      "author": {
+        "id": 1000026
+      },
+      "writtenOn": "2017-05-05T15:56:40Z",
+      "side": 1,
+      "message": "better use QCOM_HARDWARE as everywhere else in this project",
+      "revId": "6b9029716ec99a2142d16b7f76d8088c10a47dfb",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    }
+  ]
+}

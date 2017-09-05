@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "086286a8_31e9aa96",
+        "filename": "include/hardware/hwcomposer.h",
+        "patchSetId": 1
+      },
+      "lineNbr": 291,
+      "author": {
+        "id": 1000026
+      },
+      "writtenOn": "2017-09-05T09:23:19Z",
+      "side": 1,
+      "message": "in N it was\n\n#ifndef PREBUILT_HWC\n            /* Color for Dim Layer */\n            hwc_color_t color;\n#endif",
+      "revId": "918cdbae92eb26cfc75740e94ba18fac2e7d5108",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    }
+  ]
+}

@@ -286,6 +286,11 @@ typedef struct hwc_layer_1 {
              * their origin is the top-left corner.
              */
             hwc_region_t surfaceDamage;
+
+#ifdef USE_HWC_DIM_LAYER_COLOR
+            /* Color for Dim Layer */
+            hwc_color_t color;
+#endif
         };
     };
 

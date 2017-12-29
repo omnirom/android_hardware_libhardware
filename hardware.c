@@ -160,6 +160,13 @@ static int hw_module_exists(char *path, size_t path_len, const char *name,
     return -ENOENT;
 }
 
+int hw_get_module_by_path(const char *class_id, const char *path,
+                           const struct hw_module_t **module)
+{
+
+    return load(class_id, path, module);
+}
+
 int hw_get_module_by_class(const char *class_id, const char *inst,
                            const struct hw_module_t **module)
 {

@@ -53,6 +53,7 @@ typedef enum fingerprint_error {
     FINGERPRINT_ERROR_CANCELED = 5, /* The current operation can't proceed. See above. */
     FINGERPRINT_ERROR_UNABLE_TO_REMOVE = 6, /* fingerprint with given id can't be removed */
     FINGERPRINT_ERROR_LOCKOUT = 7, /* the fingerprint hardware is in lockout due to too many attempts */
+    FINGERPRINT_ERROR_DUPLICATE_FINGER = 100,
     FINGERPRINT_ERROR_VENDOR_BASE = 1000 /* vendor-specific error messages start here */
 } fingerprint_error_t;
 
@@ -261,6 +262,8 @@ typedef struct fingerprint_device {
     int (*authenticate)(struct fingerprint_device *dev, uint64_t operation_id, uint32_t gid);
 
     /* Reserved for backward binary compatibility */
+    int (*update_status)(struct fingerprint_device *dev,uint32_t status);
+    uint32_t (*get_status)(struct fingerprint_device *dev);
     void *reserved[4];
 } fingerprint_device_t;
 

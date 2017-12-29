@@ -241,6 +241,9 @@ int hw_get_module(const char *id, const struct hw_module_t **module);
 int hw_get_module_by_class(const char *class_id, const char *inst,
                            const struct hw_module_t **module);
 
+int hw_get_module_by_path(const char *class_id, const char *path,
+                           const struct hw_module_t **module);
+
 __END_DECLS
 
 #endif  /* ANDROID_INCLUDE_HARDWARE_HARDWARE_H */
